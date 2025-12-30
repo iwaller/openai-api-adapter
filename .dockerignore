@@ -1,0 +1,27 @@
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*.egg-info
+.venv
+
+# IDE
+.idea
+.vscode
+
+# Docker
+Dockerfile
+compose.yaml
+.dockerignore
+
+# Docs
+README.md
+*.md

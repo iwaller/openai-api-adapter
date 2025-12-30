@@ -1,0 +1,11 @@
+services:
+  openai-api-adapter:
+    build: .
+    ports:
+      - "6600:6600"
+    environment:
+      - PORT=6600
+      - DEBUG=false
+      - DEFAULT_PROVIDER=claude
+      # - CLAUDE_BASE_URL=https://api.anthropic.com
+    restart: unless-stopped

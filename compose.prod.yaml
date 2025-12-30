@@ -1,0 +1,37 @@
+services:
+  openai-api-adapter:
+    image: iwaller/openai-api-adapter:0.0.1
+    container_name: openai-api-adapter
+    ports:
+      - "6600:6600"
+    environment:
+      - PORT=6600
+      - DEBUG=false
+      - DEFAULT_PROVIDER=claude
+      - CLAUDE_BASE_URL=https://claude.dsrrr.com/api
+    restart: always
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6600/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 128M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
