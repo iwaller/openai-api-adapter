@@ -24,10 +24,14 @@ class Settings(BaseSettings):
     claude_base_url: str | None = None
     claude_default_model: str = "claude-sonnet-4-20250514"
     claude_allowed_models: list[str] = [
+        # Claude 4
         "claude-sonnet-4-20250514",
-        "claude-3-5-haiku-20241022",
+        "claude-opus-4-20250514",
+        # Claude 3.5
         "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022",
         "claude-3-5-sonnet-20240620",
+        # Claude 3
         "claude-3-opus-20240229",
         "claude-3-sonnet-20240229",
         "claude-3-haiku-20240307",
