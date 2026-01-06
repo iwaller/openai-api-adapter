@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     # Usage override (for special use cases)
     # When enabled, reported usage will use these fixed values instead of actual
     override_usage: bool = False
-    override_input_tokens: int = 0
-    override_output_tokens: int = 0
+    override_prompt_tokens: int = 0
+    override_completion_tokens: int = 0
 
     # Provider settings
     default_provider: str = "claude"

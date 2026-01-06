@@ -293,9 +293,9 @@ class ClaudeProvider(Provider):
 
             # Apply usage override if configured
             if settings.override_usage:
-                input_tokens = settings.override_input_tokens
-                output_tokens = settings.override_output_tokens
-                logger.debug(f"Usage override: input={input_tokens}, output={output_tokens}")
+                input_tokens = settings.override_prompt_tokens
+                output_tokens = settings.override_completion_tokens
+                logger.debug(f"Usage override: prompt={input_tokens}, completion={output_tokens}")
             else:
                 input_tokens = usage.input_tokens
                 output_tokens = usage.output_tokens
@@ -438,9 +438,9 @@ class ClaudeProvider(Provider):
 
                 # Apply usage override if configured
                 if settings.override_usage:
-                    input_tokens = settings.override_input_tokens
-                    output_tokens = settings.override_output_tokens
-                    logger.debug(f"Usage override (stream): input={input_tokens}, output={output_tokens}")
+                    input_tokens = settings.override_prompt_tokens
+                    output_tokens = settings.override_completion_tokens
+                    logger.debug(f"Usage override (stream): prompt={input_tokens}, completion={output_tokens}")
 
                 # Send stop chunk with finish reason and usage
                 yield StreamChunk(
