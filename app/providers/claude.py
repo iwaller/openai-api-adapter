@@ -30,6 +30,17 @@ from app.models.common import (
 from app.providers.base import Provider
 
 
+def _map_finish_reason(claude_reason: str | None) -> str:
+    """Map Claude stop_reason to OpenAI finish_reason."""
+    mapping = {
+        "end_turn": "stop",
+        "tool_use": "tool_calls",
+        "max_tokens": "length",
+        "stop_sequence": "stop",
+    }
+    return mapping.get(claude_reason or "", "stop")
+
+
 class ClaudeProvider(Provider):
     """Claude provider using Anthropic SDK."""
 
@@ -179,12 +190,8 @@ class ClaudeProvider(Provider):
                         )
                     )
 
-            # Determine finish reason
-            finish_reason = "stop"
-            if response.stop_reason == "tool_use":
-                finish_reason = "tool_calls"
-            elif response.stop_reason:
-                finish_reason = response.stop_reason
+            # Map Claude stop_reason to OpenAI finish_reason
+            finish_reason = _map_finish_reason(response.stop_reason)
 
             return ChatResponse(
                 id=response.id,
@@ -273,12 +280,9 @@ class ClaudeProvider(Provider):
                             )
 
                     elif event.type == "message_delta":
-                        # Get finish reason from message delta
+                        # Get finish reason from message delta and map to OpenAI format
                         if hasattr(event.delta, "stop_reason") and event.delta.stop_reason:
-                            if event.delta.stop_reason == "tool_use":
-                                finish_reason = "tool_calls"
-                            else:
-                                finish_reason = event.delta.stop_reason
+                            finish_reason = _map_finish_reason(event.delta.stop_reason)
 
                 # Send stop chunk with finish reason
                 yield StreamChunk(type="stop", finish_reason=finish_reason)
