@@ -65,6 +65,16 @@ def _log_cache_stats(usage: Any) -> None:
             f"hit_rate={cache_hit_rate:.1f}%, total_input={usage.input_tokens}{ttl_info}"
         )
 
+CLAUDE_OPUS_4_5 = "claude-opus-4-5"
+
+# Model name aliases for compatibility with different naming conventions
+# Maps short/common names to official Claude model IDs
+MODEL_ALIASES: dict[str, str] = {
+    # Claude 4 aliases
+    "claude-opus-4-5": CLAUDE_OPUS_4_5,
+    "claude-sonnet-4-5": "claude-sonnet-4-5",
+    "claude-haiku-4-5": "claude-haiku-4-5",
+}
 
 class ClaudeProvider(Provider):
     """Claude provider using Anthropic SDK."""
@@ -72,6 +82,11 @@ class ClaudeProvider(Provider):
     @property
     def name(self) -> str:
         return "claude"
+
+    def normalize_model_name(self, model_name: str) -> str:
+        if model_name not in MODEL_ALIASES:
+            model_name = CLAUDE_OPUS_4_5
+        return MODEL_ALIASES[model_name]
 
     def _get_client(self, api_key: str) -> AsyncAnthropic:
         """Create Anthropic client with optional custom base URL."""
@@ -276,6 +291,15 @@ class ClaudeProvider(Provider):
             usage = response.usage
             _log_cache_stats(usage)
 
+            # Apply usage override if configured
+            if settings.override_usage:
+                input_tokens = settings.override_input_tokens
+                output_tokens = settings.override_output_tokens
+                logger.debug(f"Usage override: input={input_tokens}, output={output_tokens}")
+            else:
+                input_tokens = usage.input_tokens
+                output_tokens = usage.output_tokens
+
             # Extract content and tool calls from response
             content = ""
             tool_calls: list[ToolUse] = []
@@ -300,8 +324,8 @@ class ClaudeProvider(Provider):
                 model=response.model,
                 content=content if content else None,
                 tool_calls=tool_calls if tool_calls else None,
-                input_tokens=usage.input_tokens,
-                output_tokens=usage.output_tokens,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
                 finish_reason=finish_reason,
             )
 
@@ -411,6 +435,12 @@ class ClaudeProvider(Provider):
                             finish_reason = _map_finish_reason(event.delta.stop_reason)
                         if hasattr(event, "usage") and event.usage:
                             output_tokens = event.usage.output_tokens
+
+                # Apply usage override if configured
+                if settings.override_usage:
+                    input_tokens = settings.override_input_tokens
+                    output_tokens = settings.override_output_tokens
+                    logger.debug(f"Usage override (stream): input={input_tokens}, output={output_tokens}")
 
                 # Send stop chunk with finish reason and usage
                 yield StreamChunk(
