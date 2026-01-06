@@ -56,6 +56,8 @@ app.add_middleware(
 @app.exception_handler(ProviderError)
 async def provider_error_handler(request: Request, exc: ProviderError):
     """Convert provider errors to OpenAI error format."""
+    from app.utils.logger import logger
+    logger.error(f"ProviderError: status={exc.status_code}, type={exc.error_type}, message={exc.message}")
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -88,8 +90,11 @@ async def anthropic_auth_handler(request: Request, exc: AnthropicAuthError):
 @app.exception_handler(AnthropicAPIError)
 async def anthropic_api_handler(request: Request, exc: AnthropicAPIError):
     """Map Anthropic SDK errors to OpenAI format."""
+    from app.utils.logger import logger
+    status_code = getattr(exc, "status_code", 500)
+    logger.error(f"AnthropicAPIError: status={status_code}, message={exc}")
     return JSONResponse(
-        status_code=getattr(exc, "status_code", 500),
+        status_code=status_code,
         content={
             "error": {
                 "type": "api_error",
@@ -104,7 +109,9 @@ async def anthropic_api_handler(request: Request, exc: AnthropicAPIError):
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request: Request, exc: RequestValidationError):
     """Convert FastAPI validation errors to OpenAI format."""
+    from app.utils.logger import logger
     errors = exc.errors()
+    logger.error(f"RequestValidationError: {errors}")
     # Get the first error for the message
     first_error = errors[0] if errors else {}
     loc = first_error.get("loc", [])
@@ -119,6 +126,26 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
                 "message": f"{param}: {msg}" if param else msg,
                 "code": "invalid_value",
                 "param": param,
+            }
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def general_error_handler(request: Request, exc: Exception):
+    """Catch-all error handler with logging."""
+    from app.utils.logger import logger
+    import traceback
+    logger.error(f"Unhandled exception: {type(exc).__name__}: {exc}")
+    logger.error(f"Traceback: {traceback.format_exc()}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "type": "server_error",
+                "message": str(exc),
+                "code": None,
+                "param": None,
             }
         },
     )

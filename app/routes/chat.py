@@ -53,6 +53,8 @@ async def chat_completions(
         stream=request.stream,
         max_tokens=request.max_tokens,
         temperature=request.temperature,
+        tools=request.tools,  # Log tools to diagnose tool calling issues
+        tool_choice=request.tool_choice,
     )
 
     if request.stream:

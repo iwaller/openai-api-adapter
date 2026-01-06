@@ -136,10 +136,13 @@ class ClaudeProvider(Provider):
 
     def _convert_tools(self, request: ChatRequest) -> list[dict[str, Any]] | None:
         """Convert tools to Anthropic format."""
+        from app.utils.logger import logger
+
         if not request.tools:
+            logger.debug("No tools in request")
             return None
 
-        return [
+        tools = [
             {
                 "name": tool.name,
                 "description": tool.description or "",
@@ -147,6 +150,12 @@ class ClaudeProvider(Provider):
             }
             for tool in request.tools
         ]
+
+        logger.info(f"Converted {len(tools)} tools for Claude API")
+        if tools:
+            logger.debug(f"First tool: name={tools[0]['name']}, schema_keys={list(tools[0]['input_schema'].keys())}")
+
+        return tools
 
     async def chat(self, request: ChatRequest, api_key: str) -> ChatResponse:
         """Non-streaming chat completion."""
@@ -174,9 +183,18 @@ class ClaudeProvider(Provider):
             tools = self._convert_tools(request)
             if tools:
                 kwargs["tools"] = tools
-                # Add tool_choice if specified
+                # Add tool_choice if specified (default to auto if tools present)
                 if request.tool_choice:
                     kwargs["tool_choice"] = request.tool_choice
+                else:
+                    kwargs["tool_choice"] = {"type": "auto"}
+
+            # Log kwargs being sent to Claude (excluding messages for brevity)
+            from app.utils.logger import logger
+            log_kwargs = {k: v for k, v in kwargs.items() if k != "messages"}
+            log_kwargs["tools_count"] = len(tools) if tools else 0
+            log_kwargs["messages_count"] = len(kwargs.get("messages", []))
+            logger.info(f"Claude API kwargs: {log_kwargs}")
 
             response = await client.messages.create(**kwargs)
 
@@ -216,6 +234,8 @@ class ClaudeProvider(Provider):
         except APIConnectionError as e:
             raise ConnectionError(f"Failed to connect to Claude API: {e}")
         except APIStatusError as e:
+            from app.utils.logger import logger
+            logger.error(f"Claude API error: status={e.status_code}, message={e.message}, body={e.body}")
             raise ProviderAPIError(e.status_code, str(e))
 
     async def chat_stream(
@@ -246,9 +266,18 @@ class ClaudeProvider(Provider):
             tools = self._convert_tools(request)
             if tools:
                 kwargs["tools"] = tools
-                # Add tool_choice if specified
+                # Add tool_choice if specified (default to auto if tools present)
                 if request.tool_choice:
                     kwargs["tool_choice"] = request.tool_choice
+                else:
+                    kwargs["tool_choice"] = {"type": "auto"}
+
+            # Log kwargs being sent to Claude (excluding messages for brevity)
+            from app.utils.logger import logger
+            log_kwargs = {k: v for k, v in kwargs.items() if k != "messages"}
+            log_kwargs["tools_count"] = len(tools) if tools else 0
+            log_kwargs["messages_count"] = len(kwargs.get("messages", []))
+            logger.info(f"Claude API stream kwargs: {log_kwargs}")
 
             async with client.messages.stream(**kwargs) as stream:
                 # Send start chunk
@@ -320,6 +349,8 @@ class ClaudeProvider(Provider):
         except APIConnectionError as e:
             raise ConnectionError(f"Failed to connect to Claude API: {e}")
         except APIStatusError as e:
+            from app.utils.logger import logger
+            logger.error(f"Claude API error: status={e.status_code}, message={e.message}, body={e.body}")
             raise ProviderAPIError(e.status_code, str(e))
 
     def list_models(self) -> list[ModelInfo]:

@@ -113,7 +113,7 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
             )
         elif openai_msg.content:
             # Convert content parts, stripping audio
-            content_blocks = []
+            content_blocks: list[ContentBlock] = []
             for part in openai_msg.content:
                 if part.type == "text":
                     content_blocks.append(
@@ -157,6 +157,41 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
                 elif part.type == "input_audio":
                     # Audio input is stripped (not supported by Claude)
                     pass
+                elif part.type == "tool_use":
+                    # Cursor sends Claude-style tool_use directly
+                    content_blocks.append(
+                        ContentBlock(
+                            type="tool_use",
+                            tool_use=ToolUse(
+                                id=part.id or "",
+                                name=part.name or "",
+                                input=part.input or {},
+                            ),
+                        )
+                    )
+                elif part.type == "tool_result":
+                    # Cursor sends Claude-style tool_result directly
+                    # Extract text content from nested content
+                    result_content = ""
+                    if isinstance(part.content, str):
+                        result_content = part.content
+                    elif isinstance(part.content, list):
+                        # Content is a list of blocks, extract text
+                        text_parts = []
+                        for block in part.content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                text_parts.append(block.get("text", ""))
+                        result_content = "\n".join(text_parts)
+
+                    content_blocks.append(
+                        ContentBlock(
+                            type="tool_result",
+                            tool_result=ToolResult(
+                                tool_use_id=part.tool_use_id or "",
+                                content=result_content,
+                            ),
+                        )
+                    )
 
             if content_blocks:
                 messages.append(Message(role=openai_msg.role, content=content_blocks))
@@ -165,12 +200,26 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
     flush_tool_results()
 
     # Convert tools if present (strict parameter is ignored)
+    # Supports both OpenAI format and Cursor's direct format
+    from app.utils.logger import logger
     tools: list[ToolDefinition] | None = None
     if request.tools:
+        logger.info(f"Request has {len(request.tools)} tools, first tool type: {type(request.tools[0])}")
+        if request.tools:
+            first_tool = request.tools[0]
+            logger.debug(f"First tool content: {first_tool}")
         tools = []
         for tool in request.tools:
-            if isinstance(tool, dict) and tool.get("type") == "function":
-                func = tool.get("function", {})
+            # Handle both dict and Pydantic model
+            if isinstance(tool, dict):
+                tool_dict = tool
+            else:
+                # Pydantic model - convert to dict first
+                tool_dict = tool.model_dump() if hasattr(tool, "model_dump") else dict(tool)
+
+            # Check for standard OpenAI format: {"type": "function", "function": {...}}
+            if tool_dict.get("type") == "function" and tool_dict.get("function"):
+                func = tool_dict["function"]
                 tools.append(
                     ToolDefinition(
                         name=func.get("name", ""),
@@ -178,6 +227,16 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
                         input_schema=func.get("parameters", {}),
                     )
                 )
+            # Check for Cursor's direct format: {"name": ..., "input_schema": ...}
+            elif tool_dict.get("name") and tool_dict.get("input_schema"):
+                tools.append(
+                    ToolDefinition(
+                        name=tool_dict["name"],
+                        description=tool_dict.get("description"),
+                        input_schema=tool_dict["input_schema"],
+                    )
+                )
+        logger.info(f"Converted {len(tools)} tools to ToolDefinition")
 
     # Check if stream_options.include_usage is set
     include_usage = False
@@ -202,16 +261,16 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
         if not stop_sequences:
             stop_sequences = None
 
-    # Convert tool_choice to Claude format
+    # Convert tool_choice to Claude format (use dict format for consistency)
     # OpenAI: "auto", "none", "required", or {"type": "function", "function": {"name": "..."}}
-    # Claude: "auto", "any", or {"type": "tool", "name": "..."}
+    # Claude: {"type": "auto"}, {"type": "any"}, {"type": "none"}, or {"type": "tool", "name": "..."}
     tool_choice = None
     if request.tool_choice:
         if isinstance(request.tool_choice, str):
             if request.tool_choice == "required":
-                tool_choice = "any"  # Claude equivalent
+                tool_choice = {"type": "any"}  # Claude equivalent
             elif request.tool_choice in ("auto", "none"):
-                tool_choice = request.tool_choice
+                tool_choice = {"type": request.tool_choice}
         elif isinstance(request.tool_choice, dict):
             # {"type": "function", "function": {"name": "..."}} -> {"type": "tool", "name": "..."}
             func = request.tool_choice.get("function", {})

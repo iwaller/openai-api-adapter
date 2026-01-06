@@ -21,12 +21,23 @@ class OpenAIInputAudio(BaseModel):
 
 
 class OpenAIContentPart(BaseModel):
-    """OpenAI content part (text, image, or audio)."""
+    """OpenAI content part - flexible to support various content types.
 
-    type: Literal["text", "image_url", "input_audio"]
+    Standard OpenAI types: text, image_url, input_audio
+    Cursor/Claude types: tool_use, tool_result (passed through directly)
+    """
+
+    type: str  # Flexible type to support Cursor's Claude-style content
     text: str | None = None
     image_url: OpenAIImageUrl | None = None
     input_audio: OpenAIInputAudio | None = None  # Will be stripped for Claude
+    # Cursor/Claude-specific fields (passed through)
+    id: str | None = None  # tool_use id
+    name: str | None = None  # tool name
+    input: Any | None = None  # tool input
+    tool_use_id: str | None = None  # tool_result reference
+    content: Any | None = None  # tool_result content
+    cache_control: Any | None = None  # Cursor cache control
 
 
 class OpenAIFunctionCall(BaseModel):

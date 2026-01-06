@@ -217,6 +217,11 @@ def log_request(
     c = COLORS
     separator = f"{c['dim']}{'─' * LOG_SEPARATOR_WIDTH}{c['reset']}"
 
+    # Check for tools
+    tools = kwargs.get('tools')
+    tools_info = f"{len(tools)} tools" if tools else "None"
+    tool_choice = kwargs.get('tool_choice') or 'auto'
+
     lines = [
         "",
         separator,
@@ -226,6 +231,8 @@ def log_request(
         f"  {c['bold']}Stream:{c['reset']}      {kwargs.get('stream', False)}",
         f"  {c['bold']}Max Tokens:{c['reset']}  {kwargs.get('max_tokens') or 'default'}",
         f"  {c['bold']}Temperature:{c['reset']} {kwargs.get('temperature') or 'default'}",
+        f"  {c['bold']}Tools:{c['reset']}       {c['yellow']}{tools_info}{c['reset']}",
+        f"  {c['bold']}Tool Choice:{c['reset']} {tool_choice}",
         "",
         f"  {c['bold']}Messages:{c['reset']}",
     ]
