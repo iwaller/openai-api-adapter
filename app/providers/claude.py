@@ -28,6 +28,7 @@ from app.models.common import (
     ToolUse,
 )
 from app.providers.base import Provider
+from app.utils.logger import logger
 
 
 def _map_finish_reason(claude_reason: str | None) -> str:
@@ -39,6 +40,30 @@ def _map_finish_reason(claude_reason: str | None) -> str:
         "stop_sequence": "stop",
     }
     return mapping.get(claude_reason or "", "stop")
+
+
+def _log_cache_stats(usage: Any) -> None:
+    """Log cache statistics if available.
+
+    Logs cache creation/read tokens, hit rate, and TTL breakdown.
+    """
+    cache_created = getattr(usage, "cache_creation_input_tokens", 0) or 0
+    cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+    if cache_created > 0 or cache_read > 0:
+        total_cacheable = cache_created + cache_read
+        cache_hit_rate = (cache_read / total_cacheable * 100) if total_cacheable > 0 else 0
+        # Get TTL breakdown if available
+        cache_detail = getattr(usage, "cache_creation", None)
+        ttl_info = ""
+        if cache_detail:
+            ttl_5m = getattr(cache_detail, "ephemeral_5m_input_tokens", 0) or 0
+            ttl_1h = getattr(cache_detail, "ephemeral_1h_input_tokens", 0) or 0
+            if ttl_5m > 0 or ttl_1h > 0:
+                ttl_info = f", ttl_breakdown=[5m:{ttl_5m}, 1h:{ttl_1h}]"
+        logger.info(
+            f"Cache: created={cache_created}, read={cache_read}, "
+            f"hit_rate={cache_hit_rate:.1f}%, total_input={usage.input_tokens}{ttl_info}"
+        )
 
 
 class ClaudeProvider(Provider):
@@ -185,8 +210,6 @@ class ClaudeProvider(Provider):
         Uses 1 hour TTL since tool definitions rarely change within a session.
         This is effective because Cursor typically sends many tools.
         """
-        from app.utils.logger import logger
-
         if not request.tools:
             logger.debug("No tools in request")
             return None
@@ -244,34 +267,14 @@ class ClaudeProvider(Provider):
                     kwargs["tool_choice"] = {"type": "auto"}
 
             # Log kwargs being sent to Claude (excluding messages for brevity)
-            from app.utils.logger import logger
             log_kwargs = {k: v for k, v in kwargs.items() if k != "messages"}
             log_kwargs["tools_count"] = len(tools) if tools else 0
             log_kwargs["messages_count"] = len(kwargs.get("messages", []))
             logger.info(f"Claude API kwargs: {log_kwargs}")
 
             response = await client.messages.create(**kwargs)
-
-            # Log cache statistics if available
             usage = response.usage
-            cache_created = getattr(usage, "cache_creation_input_tokens", 0) or 0
-            cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
-            if cache_created > 0 or cache_read > 0:
-                # Calculate cache efficiency
-                total_cacheable = cache_created + cache_read
-                cache_hit_rate = (cache_read / total_cacheable * 100) if total_cacheable > 0 else 0
-                # Get TTL breakdown if available
-                cache_detail = getattr(usage, "cache_creation", None)
-                ttl_info = ""
-                if cache_detail:
-                    ttl_5m = getattr(cache_detail, "ephemeral_5m_input_tokens", 0) or 0
-                    ttl_1h = getattr(cache_detail, "ephemeral_1h_input_tokens", 0) or 0
-                    if ttl_5m > 0 or ttl_1h > 0:
-                        ttl_info = f", ttl_breakdown=[5m:{ttl_5m}, 1h:{ttl_1h}]"
-                logger.info(
-                    f"Cache: created={cache_created}, read={cache_read}, "
-                    f"hit_rate={cache_hit_rate:.1f}%, total_input={usage.input_tokens}{ttl_info}"
-                )
+            _log_cache_stats(usage)
 
             # Extract content and tool calls from response
             content = ""
@@ -309,7 +312,6 @@ class ClaudeProvider(Provider):
         except APIConnectionError as e:
             raise ConnectionError(f"Failed to connect to Claude API: {e}")
         except APIStatusError as e:
-            from app.utils.logger import logger
             logger.error(f"Claude API error: status={e.status_code}, message={e.message}, body={e.body}")
             raise ProviderAPIError(e.status_code, str(e))
 
@@ -348,7 +350,6 @@ class ClaudeProvider(Provider):
                     kwargs["tool_choice"] = {"type": "auto"}
 
             # Log kwargs being sent to Claude (excluding messages for brevity)
-            from app.utils.logger import logger
             log_kwargs = {k: v for k, v in kwargs.items() if k != "messages"}
             log_kwargs["tools_count"] = len(tools) if tools else 0
             log_kwargs["messages_count"] = len(kwargs.get("messages", []))
@@ -371,25 +372,7 @@ class ClaudeProvider(Provider):
                         if hasattr(event.message, "usage"):
                             usage = event.message.usage
                             input_tokens = usage.input_tokens
-                            # Log cache statistics if available
-                            cache_created = getattr(usage, "cache_creation_input_tokens", 0) or 0
-                            cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
-                            if cache_created > 0 or cache_read > 0:
-                                # Calculate cache efficiency
-                                total_cacheable = cache_created + cache_read
-                                cache_hit_rate = (cache_read / total_cacheable * 100) if total_cacheable > 0 else 0
-                                # Get TTL breakdown if available
-                                cache_detail = getattr(usage, "cache_creation", None)
-                                ttl_info = ""
-                                if cache_detail:
-                                    ttl_5m = getattr(cache_detail, "ephemeral_5m_input_tokens", 0) or 0
-                                    ttl_1h = getattr(cache_detail, "ephemeral_1h_input_tokens", 0) or 0
-                                    if ttl_5m > 0 or ttl_1h > 0:
-                                        ttl_info = f", ttl_breakdown=[5m:{ttl_5m}, 1h:{ttl_1h}]"
-                                logger.info(
-                                    f"Cache: created={cache_created}, read={cache_read}, "
-                                    f"hit_rate={cache_hit_rate:.1f}%, total_input={input_tokens}{ttl_info}"
-                                )
+                            _log_cache_stats(usage)
 
                     elif event.type == "content_block_start":
                         # Check if this is a tool use block
@@ -444,7 +427,6 @@ class ClaudeProvider(Provider):
         except APIConnectionError as e:
             raise ConnectionError(f"Failed to connect to Claude API: {e}")
         except APIStatusError as e:
-            from app.utils.logger import logger
             logger.error(f"Claude API error: status={e.status_code}, message={e.message}, body={e.body}")
             raise ProviderAPIError(e.status_code, str(e))
 
