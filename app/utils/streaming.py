@@ -198,7 +198,7 @@ async def stream_generator(
                 }
                 yield f"data: {json.dumps(data)}\n\n"
 
-                # Send usage chunk (OpenAI includes usage in a separate final chunk)
+                # Always send usage chunk (some clients expect it even without stream_options)
                 if input_tokens > 0 or output_tokens > 0:
                     usage_data = {
                         "id": chat_id,

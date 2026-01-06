@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Header, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.config import settings
 from app.models.openai import OpenAIChatRequest
@@ -63,6 +63,7 @@ async def chat_completions(
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
+                "X-Request-Id": request_id,
             },
         )
     else:
@@ -76,7 +77,11 @@ async def chat_completions(
                 output_tokens=response.output_tokens,
                 finish_reason=response.finish_reason,
             )
-            return convert_common_to_openai(response)
+            openai_response = convert_common_to_openai(response)
+            return JSONResponse(
+                content=openai_response.model_dump(),
+                headers={"X-Request-Id": request_id},
+            )
         except Exception as e:
             log_response(request_id=request_id, error=str(e))
             raise

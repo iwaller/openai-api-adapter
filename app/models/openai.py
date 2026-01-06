@@ -56,12 +56,19 @@ class OpenAIMessage(BaseModel):
     name: str | None = None  # Function name for tool responses
 
 
+class OpenAIStreamOptions(BaseModel):
+    """OpenAI stream options."""
+
+    include_usage: bool = False
+
+
 class OpenAIChatRequest(BaseModel):
     """OpenAI chat completion request format."""
 
     model: str
     messages: list[OpenAIMessage]
     stream: bool = False
+    stream_options: OpenAIStreamOptions | None = None
     temperature: float | None = None
     top_p: float | None = None
     max_tokens: int | None = None

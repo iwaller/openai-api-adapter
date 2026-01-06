@@ -60,6 +60,7 @@ class ChatRequest(BaseModel):
     temperature: float | None = None
     top_p: float | None = None
     stream: bool = False
+    stream_include_usage: bool = False  # OpenAI stream_options.include_usage
     tools: list[ToolDefinition] | None = None
 
 

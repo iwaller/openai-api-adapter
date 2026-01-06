@@ -1,5 +1,6 @@
 import json
 import time
+import uuid
 
 from app.config import settings
 from app.models.common import (
@@ -167,6 +168,11 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
                     )
                 )
 
+    # Check if stream_options.include_usage is set
+    include_usage = False
+    if request.stream_options and request.stream_options.include_usage:
+        include_usage = True
+
     return ChatRequest(
         model=model,
         messages=messages,
@@ -174,6 +180,7 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
         temperature=request.temperature,
         top_p=request.top_p,
         stream=request.stream,
+        stream_include_usage=include_usage,
         tools=tools,
     )
 
@@ -203,8 +210,11 @@ def convert_common_to_openai(response: ChatResponse) -> OpenAIChatResponse:
             for tc in response.tool_calls
         ]
 
+    # Use OpenAI-style ID format (chatcmpl-xxx) instead of Claude's msg_xxx
+    chat_id = f"chatcmpl-{uuid.uuid4()}"
+
     return OpenAIChatResponse(
-        id=response.id,
+        id=chat_id,
         object="chat.completion",
         created=int(time.time()),
         model=response.model,
