@@ -65,7 +65,8 @@ class ClaudeProvider(Provider):
         so we concatenate all system messages together.
 
         Returns system as a list of content blocks with cache_control
-        for prompt caching support.
+        for prompt caching support. Uses 1 hour TTL for system prompts
+        since they rarely change.
         """
         system_parts: list[str] = []
         other_messages: list[Message] = []
@@ -85,14 +86,14 @@ class ClaudeProvider(Provider):
         if not system_parts:
             return other_messages, None
 
-        # Return as list of content blocks with cache_control on the last block
-        # This enables Claude's prompt caching feature
+        # Return as list of content blocks with cache_control
+        # Use 1 hour TTL for system prompts (they rarely change)
         system_text = "\n".join(system_parts)
         system_blocks = [
             {
                 "type": "text",
                 "text": system_text,
-                "cache_control": {"type": "ephemeral"},
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
             }
         ]
         return other_messages, system_blocks
@@ -181,6 +182,7 @@ class ClaudeProvider(Provider):
         """Convert tools to Anthropic format with caching support.
 
         Adds cache_control to the last tool for prompt caching.
+        Uses 1 hour TTL since tool definitions rarely change within a session.
         This is effective because Cursor typically sends many tools.
         """
         from app.utils.logger import logger
@@ -198,11 +200,12 @@ class ClaudeProvider(Provider):
             for tool in request.tools
         ]
 
-        # Add cache_control to the last tool for prompt caching
+        # Add cache_control to the last tool with 1 hour TTL
+        # Tool definitions rarely change, so longer cache is beneficial
         if tools:
-            tools[-1]["cache_control"] = {"type": "ephemeral"}
+            tools[-1]["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
 
-        logger.info(f"Converted {len(tools)} tools for Claude API (with caching)")
+        logger.info(f"Converted {len(tools)} tools for Claude API (with 1h caching)")
         if tools:
             logger.debug(f"First tool: name={tools[0]['name']}, schema_keys={list(tools[0]['input_schema'].keys())}")
 
@@ -251,12 +254,23 @@ class ClaudeProvider(Provider):
 
             # Log cache statistics if available
             usage = response.usage
-            cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
+            cache_created = getattr(usage, "cache_creation_input_tokens", 0) or 0
             cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
-            if cache_creation > 0 or cache_read > 0:
+            if cache_created > 0 or cache_read > 0:
+                # Calculate cache efficiency
+                total_cacheable = cache_created + cache_read
+                cache_hit_rate = (cache_read / total_cacheable * 100) if total_cacheable > 0 else 0
+                # Get TTL breakdown if available
+                cache_detail = getattr(usage, "cache_creation", None)
+                ttl_info = ""
+                if cache_detail:
+                    ttl_5m = getattr(cache_detail, "ephemeral_5m_input_tokens", 0) or 0
+                    ttl_1h = getattr(cache_detail, "ephemeral_1h_input_tokens", 0) or 0
+                    if ttl_5m > 0 or ttl_1h > 0:
+                        ttl_info = f", ttl_breakdown=[5m:{ttl_5m}, 1h:{ttl_1h}]"
                 logger.info(
-                    f"Cache stats: created={cache_creation}, read={cache_read}, "
-                    f"total_input={usage.input_tokens}"
+                    f"Cache: created={cache_created}, read={cache_read}, "
+                    f"hit_rate={cache_hit_rate:.1f}%, total_input={usage.input_tokens}{ttl_info}"
                 )
 
             # Extract content and tool calls from response
@@ -358,12 +372,23 @@ class ClaudeProvider(Provider):
                             usage = event.message.usage
                             input_tokens = usage.input_tokens
                             # Log cache statistics if available
-                            cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
+                            cache_created = getattr(usage, "cache_creation_input_tokens", 0) or 0
                             cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
-                            if cache_creation > 0 or cache_read > 0:
+                            if cache_created > 0 or cache_read > 0:
+                                # Calculate cache efficiency
+                                total_cacheable = cache_created + cache_read
+                                cache_hit_rate = (cache_read / total_cacheable * 100) if total_cacheable > 0 else 0
+                                # Get TTL breakdown if available
+                                cache_detail = getattr(usage, "cache_creation", None)
+                                ttl_info = ""
+                                if cache_detail:
+                                    ttl_5m = getattr(cache_detail, "ephemeral_5m_input_tokens", 0) or 0
+                                    ttl_1h = getattr(cache_detail, "ephemeral_1h_input_tokens", 0) or 0
+                                    if ttl_5m > 0 or ttl_1h > 0:
+                                        ttl_info = f", ttl_breakdown=[5m:{ttl_5m}, 1h:{ttl_1h}]"
                                 logger.info(
-                                    f"Cache stats: created={cache_creation}, read={cache_read}, "
-                                    f"total_input={input_tokens}"
+                                    f"Cache: created={cache_created}, read={cache_read}, "
+                                    f"hit_rate={cache_hit_rate:.1f}%, total_input={input_tokens}{ttl_info}"
                                 )
 
                     elif event.type == "content_block_start":
