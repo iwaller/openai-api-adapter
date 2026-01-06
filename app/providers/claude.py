@@ -57,12 +57,15 @@ class ClaudeProvider(Provider):
 
     def _extract_system(
         self, messages: list[Message]
-    ) -> tuple[list[Message], str | None]:
+    ) -> tuple[list[Message], list[dict[str, Any]] | None]:
         """
         Extract and concatenate system messages.
 
         Claude only supports a single system message at the beginning,
         so we concatenate all system messages together.
+
+        Returns system as a list of content blocks with cache_control
+        for prompt caching support.
         """
         system_parts: list[str] = []
         other_messages: list[Message] = []
@@ -79,8 +82,20 @@ class ClaudeProvider(Provider):
             else:
                 other_messages.append(msg)
 
-        system = "\n".join(system_parts) if system_parts else None
-        return other_messages, system
+        if not system_parts:
+            return other_messages, None
+
+        # Return as list of content blocks with cache_control on the last block
+        # This enables Claude's prompt caching feature
+        system_text = "\n".join(system_parts)
+        system_blocks = [
+            {
+                "type": "text",
+                "text": system_text,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        return other_messages, system_blocks
 
     def _convert_content_block(self, block: ContentBlock) -> dict[str, Any]:
         """Convert a ContentBlock to Anthropic format."""
@@ -119,8 +134,14 @@ class ClaudeProvider(Provider):
             }
         return {"type": "text", "text": ""}
 
-    def _convert_messages(self, messages: list[Message]) -> list[dict[str, Any]]:
-        """Convert common Message format to Anthropic SDK format."""
+    def _convert_messages(
+        self, messages: list[Message], enable_caching: bool = True
+    ) -> list[dict[str, Any]]:
+        """Convert common Message format to Anthropic SDK format.
+
+        Optionally adds cache_control to strategic messages for prompt caching.
+        Strategy: Cache the second-to-last user message to cache conversation history.
+        """
         result: list[dict[str, Any]] = []
 
         for msg in messages:
@@ -132,10 +153,36 @@ class ClaudeProvider(Provider):
                 ]
                 result.append({"role": msg.role, "content": content_blocks})
 
+        # Add cache_control to strategic messages for conversation caching
+        if enable_caching and len(result) >= 3:
+            # Find the second-to-last user message to cache conversation history
+            user_msg_indices = [i for i, m in enumerate(result) if m["role"] == "user"]
+            if len(user_msg_indices) >= 2:
+                # Cache up to the second-to-last user message
+                cache_idx = user_msg_indices[-2]
+                msg_to_cache = result[cache_idx]
+
+                # Add cache_control to the last content block
+                if isinstance(msg_to_cache["content"], list) and msg_to_cache["content"]:
+                    msg_to_cache["content"][-1]["cache_control"] = {"type": "ephemeral"}
+                elif isinstance(msg_to_cache["content"], str):
+                    # Convert string to content block with cache_control
+                    msg_to_cache["content"] = [
+                        {
+                            "type": "text",
+                            "text": msg_to_cache["content"],
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ]
+
         return result
 
     def _convert_tools(self, request: ChatRequest) -> list[dict[str, Any]] | None:
-        """Convert tools to Anthropic format."""
+        """Convert tools to Anthropic format with caching support.
+
+        Adds cache_control to the last tool for prompt caching.
+        This is effective because Cursor typically sends many tools.
+        """
         from app.utils.logger import logger
 
         if not request.tools:
@@ -151,7 +198,11 @@ class ClaudeProvider(Provider):
             for tool in request.tools
         ]
 
-        logger.info(f"Converted {len(tools)} tools for Claude API")
+        # Add cache_control to the last tool for prompt caching
+        if tools:
+            tools[-1]["cache_control"] = {"type": "ephemeral"}
+
+        logger.info(f"Converted {len(tools)} tools for Claude API (with caching)")
         if tools:
             logger.debug(f"First tool: name={tools[0]['name']}, schema_keys={list(tools[0]['input_schema'].keys())}")
 
@@ -198,6 +249,16 @@ class ClaudeProvider(Provider):
 
             response = await client.messages.create(**kwargs)
 
+            # Log cache statistics if available
+            usage = response.usage
+            cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
+            cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+            if cache_creation > 0 or cache_read > 0:
+                logger.info(
+                    f"Cache stats: created={cache_creation}, read={cache_read}, "
+                    f"total_input={usage.input_tokens}"
+                )
+
             # Extract content and tool calls from response
             content = ""
             tool_calls: list[ToolUse] = []
@@ -222,8 +283,8 @@ class ClaudeProvider(Provider):
                 model=response.model,
                 content=content if content else None,
                 tool_calls=tool_calls if tool_calls else None,
-                input_tokens=response.usage.input_tokens,
-                output_tokens=response.usage.output_tokens,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
                 finish_reason=finish_reason,
             )
 
@@ -292,9 +353,18 @@ class ClaudeProvider(Provider):
 
                 async for event in stream:
                     if event.type == "message_start":
-                        # Capture input tokens from message_start
+                        # Capture input tokens and cache stats from message_start
                         if hasattr(event.message, "usage"):
-                            input_tokens = event.message.usage.input_tokens
+                            usage = event.message.usage
+                            input_tokens = usage.input_tokens
+                            # Log cache statistics if available
+                            cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
+                            cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+                            if cache_creation > 0 or cache_read > 0:
+                                logger.info(
+                                    f"Cache stats: created={cache_creation}, read={cache_read}, "
+                                    f"total_input={input_tokens}"
+                                )
 
                     elif event.type == "content_block_start":
                         # Check if this is a tool use block
