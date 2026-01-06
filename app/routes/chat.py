@@ -1,9 +1,12 @@
+import uuid
+
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.config import settings
 from app.models.openai import OpenAIChatRequest
 from app.utils.converter import convert_common_to_openai, convert_openai_to_common
+from app.utils.logger import log_request, log_response
 from app.utils.routing import get_provider_for_model
 from app.utils.streaming import stream_generator
 
@@ -33,6 +36,7 @@ async def chat_completions(
     - "openai/gpt-4" -> routes to OpenAI provider (when implemented)
     - "claude-3-5-sonnet" -> uses default provider
     """
+    request_id = str(uuid.uuid4())[:8]
     api_key = extract_api_key(authorization)
 
     # Get provider and actual model name from model string
@@ -41,10 +45,20 @@ async def chat_completions(
     # Convert OpenAI request to common format
     common_request = convert_openai_to_common(request, model_name)
 
+    # Log request
+    log_request(
+        request_id=request_id,
+        model=model_name,
+        messages=[{"role": m.role, "content": m.content} for m in request.messages],
+        stream=request.stream,
+        max_tokens=request.max_tokens,
+        temperature=request.temperature,
+    )
+
     if request.stream:
         # Streaming response
         return StreamingResponse(
-            stream_generator(provider, common_request, api_key),
+            stream_generator(provider, common_request, api_key, request_id),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -53,5 +67,16 @@ async def chat_completions(
         )
     else:
         # Non-streaming response
-        response = await provider.chat(common_request, api_key)
-        return convert_common_to_openai(response)
+        try:
+            response = await provider.chat(common_request, api_key)
+            log_response(
+                request_id=request_id,
+                content=response.content,
+                input_tokens=response.input_tokens,
+                output_tokens=response.output_tokens,
+                finish_reason=response.finish_reason,
+            )
+            return convert_common_to_openai(response)
+        except Exception as e:
+            log_response(request_id=request_id, error=str(e))
+            raise

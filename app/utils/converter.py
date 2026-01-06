@@ -169,7 +169,7 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
     return ChatRequest(
         model=model,
         messages=messages,
-        max_tokens=request.max_tokens or 4096,
+        max_tokens=max(request.max_tokens or 0, 65536),  # Always use at least 65536
         temperature=request.temperature,
         top_p=request.top_p,
         stream=request.stream,

@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     port: int = 6600
     debug: bool = False
 
+    # Logging settings
+    log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
+    log_dir: str = "logs"
+
     # Provider settings
     default_provider: str = "claude"
 

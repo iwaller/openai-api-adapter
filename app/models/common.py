@@ -56,7 +56,7 @@ class ChatRequest(BaseModel):
 
     model: str
     messages: list[Message]
-    max_tokens: int = 4096
+    max_tokens: int = 65536
     temperature: float | None = None
     top_p: float | None = None
     stream: bool = False
@@ -75,12 +75,23 @@ class ChatResponse(BaseModel):
     finish_reason: str = "stop"
 
 
+class StreamToolCall(BaseModel):
+    """Tool call information for streaming."""
+
+    index: int
+    id: str | None = None  # Only in first chunk
+    name: str | None = None  # Only in first chunk
+    arguments_delta: str = ""  # Incremental JSON
+
+
 class StreamChunk(BaseModel):
     """Streaming chunk for SSE responses."""
 
-    type: Literal["start", "delta", "stop"]
+    type: Literal["start", "delta", "tool_call_start", "tool_call_delta", "stop"]
     content: str = ""
     model: str | None = None
+    tool_call: StreamToolCall | None = None
+    finish_reason: str | None = None  # "stop" or "tool_calls"
 
 
 class ModelInfo(BaseModel):

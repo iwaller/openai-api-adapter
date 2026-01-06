@@ -5,74 +5,180 @@ from collections.abc import AsyncIterator
 
 from app.models.common import ChatRequest, StreamChunk
 from app.providers.base import Provider
+from app.utils.logger import log_response, log_stream_chunk, log_stream_end, log_stream_start
 
 
 async def stream_generator(
     provider: Provider,
     request: ChatRequest,
     api_key: str,
+    request_id: str = "",
 ) -> AsyncIterator[str]:
     """
     Convert provider stream chunks to OpenAI SSE format.
 
+    Supports both text content and tool calls streaming.
     Yields SSE-formatted strings for streaming responses.
     """
     chat_id = f"chatcmpl-{uuid.uuid4()}"
     timestamp = int(time.time())
     model = request.model
+    full_content: list[str] = []  # Collect full content for logging
+    tool_calls_log: list[dict] = []  # Collect tool calls for logging
+    finish_reason = "stop"
 
-    async for chunk in provider.chat_stream(request, api_key):
-        if chunk.type == "start":
-            data = {
-                "id": chat_id,
-                "object": "chat.completion.chunk",
-                "created": timestamp,
-                "model": model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {"role": "assistant"},
-                        "logprobs": None,
-                        "finish_reason": None,
-                    }
-                ],
-                "system_fingerprint": None,
-            }
-            yield f"data: {json.dumps(data)}\n\n"
+    try:
+        async for chunk in provider.chat_stream(request, api_key):
+            if chunk.type == "start":
+                log_stream_start(request_id, model)
+                data = {
+                    "id": chat_id,
+                    "object": "chat.completion.chunk",
+                    "created": timestamp,
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant"},
+                            "logprobs": None,
+                            "finish_reason": None,
+                        }
+                    ],
+                    "system_fingerprint": None,
+                }
+                yield f"data: {json.dumps(data)}\n\n"
 
-        elif chunk.type == "delta":
-            data = {
-                "id": chat_id,
-                "object": "chat.completion.chunk",
-                "created": timestamp,
-                "model": model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {"content": chunk.content},
-                        "logprobs": None,
-                        "finish_reason": None,
-                    }
-                ],
-                "system_fingerprint": None,
-            }
-            yield f"data: {json.dumps(data)}\n\n"
+            elif chunk.type == "delta":
+                # Text content delta
+                full_content.append(chunk.content)
+                log_stream_chunk(request_id, chunk.content)
+                data = {
+                    "id": chat_id,
+                    "object": "chat.completion.chunk",
+                    "created": timestamp,
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": chunk.content},
+                            "logprobs": None,
+                            "finish_reason": None,
+                        }
+                    ],
+                    "system_fingerprint": None,
+                }
+                yield f"data: {json.dumps(data)}\n\n"
 
-        elif chunk.type == "stop":
-            data = {
-                "id": chat_id,
-                "object": "chat.completion.chunk",
-                "created": timestamp,
-                "model": model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {},
-                        "logprobs": None,
-                        "finish_reason": "stop",
+            elif chunk.type == "tool_call_start":
+                # Tool call start - send id, type, and function name
+                if chunk.tool_call:
+                    # Track tool call for logging
+                    tool_calls_log.append({
+                        "id": chunk.tool_call.id,
+                        "name": chunk.tool_call.name,
+                        "arguments": "",
+                    })
+
+                    data = {
+                        "id": chat_id,
+                        "object": "chat.completion.chunk",
+                        "created": timestamp,
+                        "model": model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": chunk.tool_call.index,
+                                            "id": chunk.tool_call.id,
+                                            "type": "function",
+                                            "function": {
+                                                "name": chunk.tool_call.name,
+                                                "arguments": "",
+                                            },
+                                        }
+                                    ]
+                                },
+                                "logprobs": None,
+                                "finish_reason": None,
+                            }
+                        ],
+                        "system_fingerprint": None,
                     }
-                ],
-                "system_fingerprint": None,
-            }
-            yield f"data: {json.dumps(data)}\n\n"
-            yield "data: [DONE]\n\n"
+                    yield f"data: {json.dumps(data)}\n\n"
+
+            elif chunk.type == "tool_call_delta":
+                # Tool call arguments delta
+                if chunk.tool_call:
+                    # Append to tool call arguments for logging
+                    if tool_calls_log and chunk.tool_call.index < len(tool_calls_log):
+                        tool_calls_log[chunk.tool_call.index]["arguments"] += chunk.tool_call.arguments_delta
+
+                    data = {
+                        "id": chat_id,
+                        "object": "chat.completion.chunk",
+                        "created": timestamp,
+                        "model": model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": chunk.tool_call.index,
+                                            "function": {
+                                                "arguments": chunk.tool_call.arguments_delta,
+                                            },
+                                        }
+                                    ]
+                                },
+                                "logprobs": None,
+                                "finish_reason": None,
+                            }
+                        ],
+                        "system_fingerprint": None,
+                    }
+                    yield f"data: {json.dumps(data)}\n\n"
+
+            elif chunk.type == "stop":
+                log_stream_end(request_id)
+                finish_reason = chunk.finish_reason or "stop"
+
+                # Log complete response with content and/or tool calls
+                log_content = "".join(full_content) if full_content else None
+                if tool_calls_log:
+                    # Include tool calls in log
+                    tool_calls_str = json.dumps(tool_calls_log, ensure_ascii=False)
+                    if log_content:
+                        log_content = f"{log_content}\n[Tool Calls: {tool_calls_str}]"
+                    else:
+                        log_content = f"[Tool Calls: {tool_calls_str}]"
+
+                log_response(
+                    request_id=request_id,
+                    content=log_content,
+                    finish_reason=finish_reason,
+                )
+
+                data = {
+                    "id": chat_id,
+                    "object": "chat.completion.chunk",
+                    "created": timestamp,
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {},
+                            "logprobs": None,
+                            "finish_reason": finish_reason,
+                        }
+                    ],
+                    "system_fingerprint": None,
+                }
+                yield f"data: {json.dumps(data)}\n\n"
+                yield "data: [DONE]\n\n"
+
+    except Exception as e:
+        log_response(request_id=request_id, error=str(e))
+        raise

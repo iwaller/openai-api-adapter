@@ -24,6 +24,7 @@ from app.models.common import (
     Message,
     ModelInfo,
     StreamChunk,
+    StreamToolCall,
     ToolUse,
 )
 from app.providers.base import Provider
@@ -207,7 +208,7 @@ class ClaudeProvider(Provider):
     async def chat_stream(
         self, request: ChatRequest, api_key: str
     ) -> AsyncIterator[StreamChunk]:
-        """Streaming chat completion."""
+        """Streaming chat completion with tool call support."""
         client = self._get_client(api_key)
         messages, system = self._extract_system(request.messages)
 
@@ -234,13 +235,53 @@ class ClaudeProvider(Provider):
                 # Send start chunk
                 yield StreamChunk(type="start", model=request.model)
 
-                async for event in stream:
-                    if event.type == "content_block_delta":
-                        if hasattr(event.delta, "text"):
-                            yield StreamChunk(type="delta", content=event.delta.text)
+                # Track tool calls by index (content block index)
+                tool_call_index_map: dict[int, int] = {}  # block_index -> tool_call_index
+                current_tool_index = 0
+                finish_reason = "stop"
 
-                # Send stop chunk
-                yield StreamChunk(type="stop")
+                async for event in stream:
+                    if event.type == "content_block_start":
+                        # Check if this is a tool use block
+                        if hasattr(event.content_block, "type"):
+                            if event.content_block.type == "tool_use":
+                                # Map block index to tool call index
+                                tool_call_index_map[event.index] = current_tool_index
+                                yield StreamChunk(
+                                    type="tool_call_start",
+                                    tool_call=StreamToolCall(
+                                        index=current_tool_index,
+                                        id=event.content_block.id,
+                                        name=event.content_block.name,
+                                    ),
+                                )
+                                current_tool_index += 1
+
+                    elif event.type == "content_block_delta":
+                        if hasattr(event.delta, "text"):
+                            # Text content delta
+                            yield StreamChunk(type="delta", content=event.delta.text)
+                        elif hasattr(event.delta, "partial_json"):
+                            # Tool input JSON delta
+                            tool_idx = tool_call_index_map.get(event.index, 0)
+                            yield StreamChunk(
+                                type="tool_call_delta",
+                                tool_call=StreamToolCall(
+                                    index=tool_idx,
+                                    arguments_delta=event.delta.partial_json,
+                                ),
+                            )
+
+                    elif event.type == "message_delta":
+                        # Get finish reason from message delta
+                        if hasattr(event.delta, "stop_reason") and event.delta.stop_reason:
+                            if event.delta.stop_reason == "tool_use":
+                                finish_reason = "tool_calls"
+                            else:
+                                finish_reason = event.delta.stop_reason
+
+                # Send stop chunk with finish reason
+                yield StreamChunk(type="stop", finish_reason=finish_reason)
 
         except AnthropicAuthError as e:
             raise AuthenticationError(str(e))
