@@ -3,9 +3,13 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 
+from app.config import settings
 from app.models.common import ChatRequest, StreamChunk
 from app.providers.base import Provider
 from app.utils.logger import log_response, log_stream_chunk, log_stream_end, log_stream_start
+
+# Max content size to accumulate for logging (to prevent unbounded memory growth)
+MAX_LOG_CONTENT_SIZE = 50000  # 50KB
 
 
 async def stream_generator(
@@ -23,8 +27,14 @@ async def stream_generator(
     chat_id = f"chatcmpl-{uuid.uuid4()}"
     timestamp = int(time.time())
     model = request.model
-    full_content: list[str] = []  # Collect full content for logging
-    tool_calls_log: list[dict] = []  # Collect tool calls for logging
+
+    # Collect content for logging with size limit to prevent memory issues
+    full_content: list[str] = []
+    full_content_size = 0
+    content_truncated = False
+
+    # Use dict for tool calls to handle out-of-order indices
+    tool_calls_log: dict[int, dict] = {}
     finish_reason = "stop"
 
     try:
@@ -49,8 +59,13 @@ async def stream_generator(
                 yield f"data: {json.dumps(data)}\n\n"
 
             elif chunk.type == "delta":
-                # Text content delta
-                full_content.append(chunk.content)
+                # Text content delta - accumulate with size limit
+                if not content_truncated:
+                    if full_content_size + len(chunk.content) <= MAX_LOG_CONTENT_SIZE:
+                        full_content.append(chunk.content)
+                        full_content_size += len(chunk.content)
+                    else:
+                        content_truncated = True
                 log_stream_chunk(request_id, chunk.content)
                 data = {
                     "id": chat_id,
@@ -72,12 +87,12 @@ async def stream_generator(
             elif chunk.type == "tool_call_start":
                 # Tool call start - send id, type, and function name
                 if chunk.tool_call:
-                    # Track tool call for logging
-                    tool_calls_log.append({
+                    # Track tool call for logging using dict with index as key
+                    tool_calls_log[chunk.tool_call.index] = {
                         "id": chunk.tool_call.id,
                         "name": chunk.tool_call.name,
                         "arguments": "",
-                    })
+                    }
 
                     data = {
                         "id": chat_id,
@@ -111,8 +126,8 @@ async def stream_generator(
             elif chunk.type == "tool_call_delta":
                 # Tool call arguments delta
                 if chunk.tool_call:
-                    # Append to tool call arguments for logging
-                    if tool_calls_log and chunk.tool_call.index < len(tool_calls_log):
+                    # Append to tool call arguments for logging (using dict lookup)
+                    if chunk.tool_call.index in tool_calls_log:
                         tool_calls_log[chunk.tool_call.index]["arguments"] += chunk.tool_call.arguments_delta
 
                     data = {

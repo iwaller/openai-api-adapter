@@ -1,6 +1,7 @@
 import json
 import time
 
+from app.config import settings
 from app.models.common import (
     ChatRequest,
     ChatResponse,
@@ -169,7 +170,7 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
     return ChatRequest(
         model=model,
         messages=messages,
-        max_tokens=max(request.max_tokens or 0, 65536),  # Always use at least 65536
+        max_tokens=request.max_tokens or settings.default_max_tokens,
         temperature=request.temperature,
         top_p=request.top_p,
         stream=request.stream,

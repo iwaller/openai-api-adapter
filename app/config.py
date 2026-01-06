@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     # Logging settings
     log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
     log_dir: str = "logs"
+    log_full_content: bool = True  # Set to False to redact message content
+    log_max_content_length: int = 10000  # Max chars to log per message (0 = unlimited)
+
+    # Token settings
+    default_max_tokens: int = 65536  # Default max_tokens for Claude
 
     # Provider settings
     default_provider: str = "claude"
