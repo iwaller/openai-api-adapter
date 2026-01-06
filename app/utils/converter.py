@@ -40,8 +40,18 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
     """
     messages: list[Message] = []
 
+    # Collect consecutive tool results to merge into single user message
+    pending_tool_results: list[ContentBlock] = []
+
+    def flush_tool_results() -> None:
+        """Flush accumulated tool results into a single user message."""
+        nonlocal pending_tool_results
+        if pending_tool_results:
+            messages.append(Message(role="user", content=pending_tool_results))
+            pending_tool_results = []
+
     for openai_msg in request.messages:
-        # Handle tool response messages
+        # Handle tool response messages - accumulate for merging
         if openai_msg.role == "tool":
             if openai_msg.tool_call_id and openai_msg.content:
                 content_str = (
@@ -49,21 +59,19 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
                     if isinstance(openai_msg.content, str)
                     else str(openai_msg.content)
                 )
-                messages.append(
-                    Message(
-                        role="user",
-                        content=[
-                            ContentBlock(
-                                type="tool_result",
-                                tool_result=ToolResult(
-                                    tool_use_id=openai_msg.tool_call_id,
-                                    content=content_str,
-                                ),
-                            )
-                        ],
+                pending_tool_results.append(
+                    ContentBlock(
+                        type="tool_result",
+                        tool_result=ToolResult(
+                            tool_use_id=openai_msg.tool_call_id,
+                            content=content_str,
+                        ),
                     )
                 )
             continue
+
+        # Flush any pending tool results before processing non-tool message
+        flush_tool_results()
 
         # Handle assistant messages with tool_calls
         if openai_msg.role == "assistant" and openai_msg.tool_calls:
@@ -153,6 +161,9 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
             if content_blocks:
                 messages.append(Message(role=openai_msg.role, content=content_blocks))
 
+    # Flush any remaining tool results at the end
+    flush_tool_results()
+
     # Convert tools if present (strict parameter is ignored)
     tools: list[ToolDefinition] | None = None
     if request.tools:
@@ -173,15 +184,51 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
     if request.stream_options and request.stream_options.include_usage:
         include_usage = True
 
+    # Use max_completion_tokens if provided, fallback to max_tokens, then default
+    max_tokens = (
+        request.max_completion_tokens
+        or request.max_tokens
+        or settings.default_max_tokens
+    )
+
+    # Convert stop sequences (filter whitespace-only sequences as per Claude docs)
+    stop_sequences: list[str] | None = None
+    if request.stop:
+        if isinstance(request.stop, str):
+            if request.stop.strip():
+                stop_sequences = [request.stop]
+        else:
+            stop_sequences = [s for s in request.stop if s.strip()]
+        if not stop_sequences:
+            stop_sequences = None
+
+    # Convert tool_choice to Claude format
+    # OpenAI: "auto", "none", "required", or {"type": "function", "function": {"name": "..."}}
+    # Claude: "auto", "any", or {"type": "tool", "name": "..."}
+    tool_choice = None
+    if request.tool_choice:
+        if isinstance(request.tool_choice, str):
+            if request.tool_choice == "required":
+                tool_choice = "any"  # Claude equivalent
+            elif request.tool_choice in ("auto", "none"):
+                tool_choice = request.tool_choice
+        elif isinstance(request.tool_choice, dict):
+            # {"type": "function", "function": {"name": "..."}} -> {"type": "tool", "name": "..."}
+            func = request.tool_choice.get("function", {})
+            if func.get("name"):
+                tool_choice = {"type": "tool", "name": func["name"]}
+
     return ChatRequest(
         model=model,
         messages=messages,
-        max_tokens=request.max_tokens or settings.default_max_tokens,
+        max_tokens=max_tokens,
         temperature=request.temperature,
         top_p=request.top_p,
+        stop=stop_sequences,
         stream=request.stream,
         stream_include_usage=include_usage,
         tools=tools,
+        tool_choice=tool_choice,
     )
 
 

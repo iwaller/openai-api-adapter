@@ -219,4 +219,13 @@ async def stream_generator(
 
     except Exception as e:
         log_response(request_id=request_id, error=str(e))
-        raise
+        # Send error in SSE format before connection drops
+        error_data = {
+            "error": {
+                "message": str(e),
+                "type": "server_error",
+                "code": None,
+            }
+        }
+        yield f"data: {json.dumps(error_data)}\n\n"
+        yield "data: [DONE]\n\n"

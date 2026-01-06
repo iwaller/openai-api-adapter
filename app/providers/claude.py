@@ -163,14 +163,20 @@ class ClaudeProvider(Provider):
             if system:
                 kwargs["system"] = system
             if request.temperature is not None:
-                kwargs["temperature"] = request.temperature
+                # Cap temperature at 1.0 as per Claude docs
+                kwargs["temperature"] = min(request.temperature, 1.0)
             if request.top_p is not None:
                 kwargs["top_p"] = request.top_p
+            if request.stop:
+                kwargs["stop_sequences"] = request.stop
 
             # Add tools if present
             tools = self._convert_tools(request)
             if tools:
                 kwargs["tools"] = tools
+                # Add tool_choice if specified
+                if request.tool_choice:
+                    kwargs["tool_choice"] = request.tool_choice
 
             response = await client.messages.create(**kwargs)
 
@@ -229,14 +235,20 @@ class ClaudeProvider(Provider):
             if system:
                 kwargs["system"] = system
             if request.temperature is not None:
-                kwargs["temperature"] = request.temperature
+                # Cap temperature at 1.0 as per Claude docs
+                kwargs["temperature"] = min(request.temperature, 1.0)
             if request.top_p is not None:
                 kwargs["top_p"] = request.top_p
+            if request.stop:
+                kwargs["stop_sequences"] = request.stop
 
             # Add tools if present
             tools = self._convert_tools(request)
             if tools:
                 kwargs["tools"] = tools
+                # Add tool_choice if specified
+                if request.tool_choice:
+                    kwargs["tool_choice"] = request.tool_choice
 
             async with client.messages.stream(**kwargs) as stream:
                 # Send start chunk

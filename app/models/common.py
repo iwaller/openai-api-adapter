@@ -59,9 +59,11 @@ class ChatRequest(BaseModel):
     max_tokens: int = 65536
     temperature: float | None = None
     top_p: float | None = None
+    stop: list[str] | None = None  # Stop sequences
     stream: bool = False
     stream_include_usage: bool = False  # OpenAI stream_options.include_usage
     tools: list[ToolDefinition] | None = None
+    tool_choice: str | dict | None = None  # "auto", "any", "none", or {"type": "tool", "name": "..."}
 
 
 class ChatResponse(BaseModel):

@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from anthropic import APIError as AnthropicAPIError
 from anthropic import AuthenticationError as AnthropicAuthError
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -61,6 +62,8 @@ async def provider_error_handler(request: Request, exc: ProviderError):
             "error": {
                 "type": exc.error_type,
                 "message": exc.message,
+                "code": None,
+                "param": None,
             }
         },
     )
@@ -75,6 +78,8 @@ async def anthropic_auth_handler(request: Request, exc: AnthropicAuthError):
             "error": {
                 "type": "authentication_error",
                 "message": str(exc),
+                "code": "invalid_api_key",
+                "param": None,
             }
         },
     )
@@ -89,6 +94,31 @@ async def anthropic_api_handler(request: Request, exc: AnthropicAPIError):
             "error": {
                 "type": "api_error",
                 "message": str(exc),
+                "code": None,
+                "param": None,
+            }
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    """Convert FastAPI validation errors to OpenAI format."""
+    errors = exc.errors()
+    # Get the first error for the message
+    first_error = errors[0] if errors else {}
+    loc = first_error.get("loc", [])
+    param = ".".join(str(x) for x in loc) if loc else None
+    msg = first_error.get("msg", "Validation error")
+
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": {
+                "type": "invalid_request_error",
+                "message": f"{param}: {msg}" if param else msg,
+                "code": "invalid_value",
+                "param": param,
             }
         },
     )

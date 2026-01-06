@@ -72,6 +72,7 @@ class OpenAIChatRequest(BaseModel):
     temperature: float | None = None
     top_p: float | None = None
     max_tokens: int | None = None
+    max_completion_tokens: int | None = None  # Newer OpenAI parameter
     # These are ignored but accepted for compatibility
     frequency_penalty: float | None = None
     presence_penalty: float | None = None
