@@ -159,6 +159,8 @@ async def stream_generator(
             elif chunk.type == "stop":
                 log_stream_end(request_id)
                 finish_reason = chunk.finish_reason or "stop"
+                input_tokens = chunk.input_tokens or 0
+                output_tokens = chunk.output_tokens or 0
 
                 # Log complete response with content and/or tool calls
                 log_content = "".join(full_content) if full_content else None
@@ -173,9 +175,12 @@ async def stream_generator(
                 log_response(
                     request_id=request_id,
                     content=log_content,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
                     finish_reason=finish_reason,
                 )
 
+                # Send final chunk with finish_reason
                 data = {
                     "id": chat_id,
                     "object": "chat.completion.chunk",
@@ -192,6 +197,24 @@ async def stream_generator(
                     "system_fingerprint": None,
                 }
                 yield f"data: {json.dumps(data)}\n\n"
+
+                # Send usage chunk (OpenAI includes usage in a separate final chunk)
+                if input_tokens > 0 or output_tokens > 0:
+                    usage_data = {
+                        "id": chat_id,
+                        "object": "chat.completion.chunk",
+                        "created": timestamp,
+                        "model": model,
+                        "choices": [],
+                        "usage": {
+                            "prompt_tokens": input_tokens,
+                            "completion_tokens": output_tokens,
+                            "total_tokens": input_tokens + output_tokens,
+                        },
+                        "system_fingerprint": None,
+                    }
+                    yield f"data: {json.dumps(usage_data)}\n\n"
+
                 yield "data: [DONE]\n\n"
 
     except Exception as e:

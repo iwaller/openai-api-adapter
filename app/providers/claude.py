@@ -246,9 +246,16 @@ class ClaudeProvider(Provider):
                 tool_call_index_map: dict[int, int] = {}  # block_index -> tool_call_index
                 current_tool_index = 0
                 finish_reason = "stop"
+                input_tokens = 0
+                output_tokens = 0
 
                 async for event in stream:
-                    if event.type == "content_block_start":
+                    if event.type == "message_start":
+                        # Capture input tokens from message_start
+                        if hasattr(event.message, "usage"):
+                            input_tokens = event.message.usage.input_tokens
+
+                    elif event.type == "content_block_start":
                         # Check if this is a tool use block
                         if hasattr(event.content_block, "type"):
                             if event.content_block.type == "tool_use":
@@ -280,12 +287,19 @@ class ClaudeProvider(Provider):
                             )
 
                     elif event.type == "message_delta":
-                        # Get finish reason from message delta and map to OpenAI format
+                        # Get finish reason and output tokens from message delta
                         if hasattr(event.delta, "stop_reason") and event.delta.stop_reason:
                             finish_reason = _map_finish_reason(event.delta.stop_reason)
+                        if hasattr(event, "usage") and event.usage:
+                            output_tokens = event.usage.output_tokens
 
-                # Send stop chunk with finish reason
-                yield StreamChunk(type="stop", finish_reason=finish_reason)
+                # Send stop chunk with finish reason and usage
+                yield StreamChunk(
+                    type="stop",
+                    finish_reason=finish_reason,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                )
 
         except AnthropicAuthError as e:
             raise AuthenticationError(str(e))

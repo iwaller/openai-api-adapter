@@ -92,6 +92,8 @@ class StreamChunk(BaseModel):
     model: str | None = None
     tool_call: StreamToolCall | None = None
     finish_reason: str | None = None  # "stop" or "tool_calls"
+    input_tokens: int | None = None  # For stop chunk
+    output_tokens: int | None = None  # For stop chunk
 
 
 class ModelInfo(BaseModel):
