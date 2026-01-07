@@ -282,15 +282,19 @@ class ClaudeProvider(Provider):
                 "type": "enabled",
                 "budget_tokens": settings.claude_budget_tokens,
             }
-            logger.info(f"Thinking mode enabled with budget_tokens={settings.claude_budget_tokens}")
+            # When thinking is enabled, temperature must be exactly 1
+            kwargs["temperature"] = 1.0
+            logger.info(f"Thinking mode enabled with budget_tokens={settings.claude_budget_tokens}, temperature forced to 1.0")
+        else:
+            # Only set temperature/top_p when thinking is disabled
+            if request.temperature is not None:
+                # Cap temperature at 1.0 as per Claude docs
+                kwargs["temperature"] = min(request.temperature, 1.0)
+            if request.top_p is not None:
+                kwargs["top_p"] = request.top_p
 
         if system:
             kwargs["system"] = system
-        if request.temperature is not None:
-            # Cap temperature at 1.0 as per Claude docs
-            kwargs["temperature"] = min(request.temperature, 1.0)
-        if request.top_p is not None:
-            kwargs["top_p"] = request.top_p
         if request.stop:
             kwargs["stop_sequences"] = request.stop
 
