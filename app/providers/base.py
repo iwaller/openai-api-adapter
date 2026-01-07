@@ -13,6 +13,9 @@ class Provider(ABC):
         """Provider name (e.g., 'claude', 'openai')."""
         pass
 
+    def normalize_model_name(self, model_name: str) -> str:
+        return model_name
+
     @abstractmethod
     async def chat(self, request: ChatRequest, api_key: str) -> ChatResponse:
         """

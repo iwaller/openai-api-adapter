@@ -9,6 +9,11 @@ services:
       - DEBUG=false
       - DEFAULT_PROVIDER=claude
       - CLAUDE_BASE_URL=https://claude.dsrrr.com/api
+      - CLAUDE_BUDGET_TOKENS=8000
+      # Usage override (set OVERRIDE_USAGE=true to enable)
+      - OVERRIDE_USAGE=false
+      - OVERRIDE_PROMPT_TOKENS=0
+      - OVERRIDE_COMPLETION_TOKENS=0
     restart: always
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6600/')"]

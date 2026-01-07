@@ -71,9 +71,16 @@ CLAUDE_OPUS_4_5 = "claude-opus-4-5"
 # Maps short/common names to official Claude model IDs
 MODEL_ALIASES: dict[str, str] = {
     # Claude 4 aliases
+    "claude-4.5-opus-high-thinking": CLAUDE_OPUS_4_5,
+    "claude-4.5-opus": CLAUDE_OPUS_4_5,
     "claude-opus-4-5": CLAUDE_OPUS_4_5,
     "claude-sonnet-4-5": "claude-sonnet-4-5",
     "claude-haiku-4-5": "claude-haiku-4-5",
+}
+
+# Models that enable thinking mode
+THINKING_MODELS: set[str] = {
+    "claude-4.5-opus-high-thinking",
 }
 
 class ClaudeProvider(Provider):
@@ -85,8 +92,8 @@ class ClaudeProvider(Provider):
 
     def normalize_model_name(self, model_name: str) -> str:
         if model_name not in MODEL_ALIASES:
-            model_name = CLAUDE_OPUS_4_5
-        return MODEL_ALIASES[model_name]
+            model_name = settings.claude_default_model
+        return MODEL_ALIASES.get(model_name, model_name)
 
     def _get_client(self, api_key: str) -> AsyncAnthropic:
         """Create Anthropic client with optional custom base URL."""
@@ -249,44 +256,69 @@ class ClaudeProvider(Provider):
 
         return tools
 
+    def _build_request_kwargs(
+        self,
+        request: ChatRequest,
+        messages: list[Message],
+        system: list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        """Build common kwargs for Claude API request.
+
+        Handles model normalization, thinking mode, and common parameters.
+        """
+        # Check if thinking mode should be enabled based on original model name
+        enable_thinking = request.model in THINKING_MODELS
+        actual_model = self.normalize_model_name(request.model)
+
+        kwargs: dict[str, Any] = {
+            "model": actual_model,
+            "max_tokens": request.max_tokens,
+            "messages": self._convert_messages(messages),
+        }
+
+        # Add thinking config if enabled
+        if enable_thinking:
+            kwargs["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": settings.claude_budget_tokens,
+            }
+            logger.info(f"Thinking mode enabled with budget_tokens={settings.claude_budget_tokens}")
+
+        if system:
+            kwargs["system"] = system
+        if request.temperature is not None:
+            # Cap temperature at 1.0 as per Claude docs
+            kwargs["temperature"] = min(request.temperature, 1.0)
+        if request.top_p is not None:
+            kwargs["top_p"] = request.top_p
+        if request.stop:
+            kwargs["stop_sequences"] = request.stop
+
+        # Add tools if present
+        tools = self._convert_tools(request)
+        if tools:
+            kwargs["tools"] = tools
+            # Add tool_choice if specified (default to auto if tools present)
+            if request.tool_choice:
+                kwargs["tool_choice"] = request.tool_choice
+            else:
+                kwargs["tool_choice"] = {"type": "auto"}
+
+        # Log kwargs being sent to Claude (excluding messages for brevity)
+        log_kwargs = {k: v for k, v in kwargs.items() if k != "messages"}
+        log_kwargs["tools_count"] = len(tools) if tools else 0
+        log_kwargs["messages_count"] = len(kwargs.get("messages", []))
+        logger.info(f"Claude API kwargs: {log_kwargs}")
+
+        return kwargs
+
     async def chat(self, request: ChatRequest, api_key: str) -> ChatResponse:
         """Non-streaming chat completion."""
         client = self._get_client(api_key)
         messages, system = self._extract_system(request.messages)
 
         try:
-            kwargs: dict[str, Any] = {
-                "model": request.model,
-                "max_tokens": request.max_tokens,
-                "messages": self._convert_messages(messages),
-            }
-
-            if system:
-                kwargs["system"] = system
-            if request.temperature is not None:
-                # Cap temperature at 1.0 as per Claude docs
-                kwargs["temperature"] = min(request.temperature, 1.0)
-            if request.top_p is not None:
-                kwargs["top_p"] = request.top_p
-            if request.stop:
-                kwargs["stop_sequences"] = request.stop
-
-            # Add tools if present
-            tools = self._convert_tools(request)
-            if tools:
-                kwargs["tools"] = tools
-                # Add tool_choice if specified (default to auto if tools present)
-                if request.tool_choice:
-                    kwargs["tool_choice"] = request.tool_choice
-                else:
-                    kwargs["tool_choice"] = {"type": "auto"}
-
-            # Log kwargs being sent to Claude (excluding messages for brevity)
-            log_kwargs = {k: v for k, v in kwargs.items() if k != "messages"}
-            log_kwargs["tools_count"] = len(tools) if tools else 0
-            log_kwargs["messages_count"] = len(kwargs.get("messages", []))
-            logger.info(f"Claude API kwargs: {log_kwargs}")
-
+            kwargs = self._build_request_kwargs(request, messages, system)
             response = await client.messages.create(**kwargs)
             usage = response.usage
             _log_cache_stats(usage)
@@ -347,37 +379,7 @@ class ClaudeProvider(Provider):
         messages, system = self._extract_system(request.messages)
 
         try:
-            kwargs: dict[str, Any] = {
-                "model": request.model,
-                "max_tokens": request.max_tokens,
-                "messages": self._convert_messages(messages),
-            }
-
-            if system:
-                kwargs["system"] = system
-            if request.temperature is not None:
-                # Cap temperature at 1.0 as per Claude docs
-                kwargs["temperature"] = min(request.temperature, 1.0)
-            if request.top_p is not None:
-                kwargs["top_p"] = request.top_p
-            if request.stop:
-                kwargs["stop_sequences"] = request.stop
-
-            # Add tools if present
-            tools = self._convert_tools(request)
-            if tools:
-                kwargs["tools"] = tools
-                # Add tool_choice if specified (default to auto if tools present)
-                if request.tool_choice:
-                    kwargs["tool_choice"] = request.tool_choice
-                else:
-                    kwargs["tool_choice"] = {"type": "auto"}
-
-            # Log kwargs being sent to Claude (excluding messages for brevity)
-            log_kwargs = {k: v for k, v in kwargs.items() if k != "messages"}
-            log_kwargs["tools_count"] = len(tools) if tools else 0
-            log_kwargs["messages_count"] = len(kwargs.get("messages", []))
-            logger.info(f"Claude API stream kwargs: {log_kwargs}")
+            kwargs = self._build_request_kwargs(request, messages, system)
 
             async with client.messages.stream(**kwargs) as stream:
                 # Send start chunk

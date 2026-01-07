@@ -39,7 +39,8 @@ async def chat_completions(
     request_id = str(uuid.uuid4())[:8]
     api_key = extract_api_key(authorization)
 
-    # Get provider and actual model name from model string
+    # Get provider and model name (without provider prefix)
+    # Model normalization is handled internally by the provider
     provider, model_name = get_provider_for_model(request.model)
 
     # Convert OpenAI request to common format
