@@ -5,10 +5,12 @@ OpenAI-compatible API adapter for multiple AI providers. Currently supports Clau
 ## Features
 
 - **OpenAI-compatible API** - Drop-in replacement for OpenAI API
-- **Model prefix routing** - Route requests to different providers using model prefixes (e.g., `claude/claude-3-5-sonnet`)
+- **Model prefix routing** - Route requests to different providers using model prefixes (e.g., `claude/claude-opus-4-5`)
 - **Streaming support** - Full SSE streaming support
 - **Multi-modal** - Support for text and images
 - **Tool/Function calling** - OpenAI-style function calling (note: `strict` parameter is ignored)
+- **Extended thinking** - Support for Claude's extended thinking mode
+- **Prompt caching** - Automatic prompt caching for system prompts, tools, and conversation history
 - **Extensible architecture** - Easy to add new AI providers
 - **Custom base URL** - Support custom API endpoints for Claude
 
@@ -21,7 +23,7 @@ Based on Claude's official documentation:
 | Audio input | Not supported, automatically stripped |
 | Function calling `strict` | Ignored (no guaranteed schema conformance) |
 | System messages | Hoisted and concatenated to beginning |
-| Prompt caching | Not supported via this adapter |
+| Extended thinking | Enabled via special model names (e.g., `claude-4.5-opus-high-thinking`) |
 
 ## Quick Start
 
@@ -52,7 +54,7 @@ cd openai-api-adapter
 uv sync
 
 # Run server
-uv run uvicorn app.main:app --port 6600
+uv run uvicorn openai_api_adapter.main:app --port 6600
 ```
 
 ## Configuration
@@ -63,22 +65,52 @@ Configuration via environment variables or `.env` file:
 |----------|---------|-------------|
 | `PORT` | `6600` | Server port |
 | `DEBUG` | `false` | Enable debug mode |
+| `LOG_LEVEL` | `INFO` | Log level (DEBUG, INFO, WARNING, ERROR) |
+| `LOG_DIR` | `logs` | Log directory |
+| `LOG_FULL_CONTENT` | `true` | Log full message content |
+| `LOG_MAX_CONTENT_LENGTH` | `10000` | Max chars to log per message (0 = unlimited) |
 | `DEFAULT_PROVIDER` | `claude` | Default AI provider |
+| `DEFAULT_MAX_TOKENS` | `65536` | Default max_tokens for requests |
 | `CLAUDE_BASE_URL` | `None` | Custom Claude API endpoint |
-| `CLAUDE_DEFAULT_MODEL` | `claude-sonnet-4-20250514` | Default model |
+| `CLAUDE_DEFAULT_MODEL` | `claude-opus-4-5` | Default model |
+| `CLAUDE_BUDGET_TOKENS` | `8000` | Budget tokens for thinking mode |
 | `CLAUDE_ALLOWED_MODELS` | See below | Allowed model list |
+| `THINKING_CACHE_TTL` | `3600` | Thinking cache TTL in seconds |
+| `THINKING_CACHE_MAXSIZE` | `10000` | Max cached thinking entries |
+| `OVERRIDE_USAGE` | `false` | Override reported token usage |
+| `OVERRIDE_PROMPT_TOKENS` | `0` | Fixed prompt tokens (when override enabled) |
+| `OVERRIDE_COMPLETION_TOKENS` | `0` | Fixed completion tokens (when override enabled) |
 
 ### Default Allowed Models
 
 ```
-claude-sonnet-4-20250514
-claude-3-5-haiku-20241022
-claude-3-5-sonnet-20241022
-claude-3-5-sonnet-20240620
-claude-3-opus-20240229
-claude-3-sonnet-20240229
-claude-3-haiku-20240307
+claude-4.5-opus-high-thinking
+claude-4.5-opus
+claude-opus-4-5
+claude-sonnet-4-5
+claude-haiku-4-5
 ```
+
+### Extended Thinking Mode
+
+Use `claude-4.5-opus-high-thinking` as the model name to enable extended thinking:
+
+```bash
+curl http://localhost:6600/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "model": "claude-4.5-opus-high-thinking",
+    "messages": [{"role": "user", "content": "Solve this complex problem..."}],
+    "stream": true
+  }'
+```
+
+When thinking mode is enabled:
+- Temperature is forced to 1.0
+- `top_p` is clamped to 0.95-1.0 range
+- `tool_choice` only supports "auto" or "none"
+- Thinking blocks are cached for tool use continuity
 
 ## API Endpoints
 
@@ -94,7 +126,7 @@ curl http://localhost:6600/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{
-    "model": "claude-3-5-sonnet-20241022",
+    "model": "claude-opus-4-5",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -105,7 +137,7 @@ curl http://localhost:6600/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{
-    "model": "claude-3-5-sonnet-20241022",
+    "model": "claude-opus-4-5",
     "messages": [{"role": "user", "content": "Hello!"}],
     "stream": true
   }'
@@ -117,10 +149,10 @@ Route to specific providers using prefixes:
 
 ```bash
 # Explicit Claude routing
-"model": "claude/claude-3-5-sonnet-20241022"
+"model": "claude/claude-opus-4-5"
 
 # Default provider (no prefix)
-"model": "claude-3-5-sonnet-20241022"
+"model": "claude-opus-4-5"
 ```
 
 ### List Models
@@ -140,7 +172,7 @@ curl http://localhost:6600/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{
-    "model": "claude-3-5-sonnet-20241022",
+    "model": "claude-opus-4-5",
     "messages": [{
       "role": "user",
       "content": [
@@ -158,7 +190,7 @@ curl http://localhost:6600/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{
-    "model": "claude-3-5-sonnet-20241022",
+    "model": "claude-opus-4-5",
     "messages": [{"role": "user", "content": "What is the weather in Tokyo?"}],
     "tools": [{
       "type": "function",
@@ -181,7 +213,7 @@ curl http://localhost:6600/v1/chat/completions \
 
 ```
 openai-api-adapter/
-├── app/
+├── openai_api_adapter/
 │   ├── main.py              # FastAPI application
 │   ├── config.py            # Pydantic settings
 │   ├── exceptions.py        # Custom exceptions
@@ -198,7 +230,9 @@ openai-api-adapter/
 │   └── utils/
 │       ├── converter.py     # Format conversion
 │       ├── routing.py       # Model prefix routing
-│       └── streaming.py     # SSE streaming
+│       ├── streaming.py     # SSE streaming
+│       ├── logger.py        # Logging utilities
+│       └── thinking_cache.py # Thinking block cache
 ├── pyproject.toml
 ├── Dockerfile
 ├── compose.yaml
@@ -208,10 +242,10 @@ openai-api-adapter/
 
 ## Adding New Providers
 
-1. Create a new provider in `app/providers/`:
+1. Create a new provider in `openai_api_adapter/providers/`:
 
 ```python
-from app.providers.base import Provider
+from openai_api_adapter.providers.base import Provider
 
 class MyProvider(Provider):
     @property
@@ -231,10 +265,10 @@ class MyProvider(Provider):
         pass
 ```
 
-2. Register in `app/main.py`:
+2. Register in `openai_api_adapter/main.py`:
 
 ```python
-from app.providers.myprovider import MyProvider
+from openai_api_adapter.providers.myprovider import MyProvider
 
 ProviderRegistry.register(MyProvider())
 ```
@@ -252,7 +286,7 @@ ProviderRegistry.register(MyProvider())
 uv sync
 
 # Run in development mode
-uv run uvicorn app.main:app --reload --port 6600
+uv run uvicorn openai_api_adapter.main:app --reload --port 6600
 
 # Run tests
 uv run pytest
