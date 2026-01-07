@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
-from app.models.openai import OpenAIModel, OpenAIModelsResponse
-from app.providers.registry import ProviderRegistry
+from openai_api_adapter.models.openai import OpenAIModel, OpenAIModelsResponse
+from openai_api_adapter.providers.registry import ProviderRegistry
 
 router = APIRouter()
 

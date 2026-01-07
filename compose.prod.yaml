@@ -10,6 +10,9 @@ services:
       - DEFAULT_PROVIDER=claude
       - CLAUDE_BASE_URL=https://claude.dsrrr.com/api
       - CLAUDE_BUDGET_TOKENS=8000
+      # Thinking cache (for preserving thinking blocks during tool use)
+      - THINKING_CACHE_TTL=3600
+      - THINKING_CACHE_MAXSIZE=10000
       # Usage override (set OVERRIDE_USAGE=true to enable)
       - OVERRIDE_USAGE=false
       - OVERRIDE_PROMPT_TOKENS=0

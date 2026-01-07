@@ -3,12 +3,12 @@ import uuid
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from app.config import settings
-from app.models.openai import OpenAIChatRequest
-from app.utils.converter import convert_common_to_openai, convert_openai_to_common
-from app.utils.logger import log_request, log_response
-from app.utils.routing import get_provider_for_model
-from app.utils.streaming import stream_generator
+from openai_api_adapter.config import settings
+from openai_api_adapter.models.openai import OpenAIChatRequest
+from openai_api_adapter.utils.converter import convert_common_to_openai, convert_openai_to_common
+from openai_api_adapter.utils.logger import log_request, log_response
+from openai_api_adapter.utils.routing import get_provider_for_model
+from openai_api_adapter.utils.streaming import stream_generator
 
 router = APIRouter()
 

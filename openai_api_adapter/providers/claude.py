@@ -9,14 +9,14 @@ from anthropic import (
     RateLimitError as AnthropicRateLimitError,
 )
 
-from app.config import settings
-from app.exceptions import (
+from openai_api_adapter.config import settings
+from openai_api_adapter.exceptions import (
     AuthenticationError,
     ConnectionError,
     ProviderAPIError,
     RateLimitError,
 )
-from app.models.common import (
+from openai_api_adapter.models.common import (
     ChatRequest,
     ChatResponse,
     ContentBlock,
@@ -27,8 +27,9 @@ from app.models.common import (
     StreamToolCall,
     ToolUse,
 )
-from app.providers.base import Provider
-from app.utils.logger import logger
+from openai_api_adapter.providers.base import Provider
+from openai_api_adapter.utils.logger import logger
+from openai_api_adapter.utils.thinking_cache import cache_thinking_blocks
 
 
 def _map_finish_reason(claude_reason: str | None) -> str:
@@ -180,6 +181,19 @@ class ClaudeProvider(Provider):
                 "tool_use_id": block.tool_result.tool_use_id,
                 "content": block.tool_result.content,
             }
+        elif block.type == "thinking":
+            # Thinking blocks must be passed back exactly as received (with signature)
+            return {
+                "type": "thinking",
+                "thinking": block.thinking or "",
+                "signature": block.signature or "",
+            }
+        elif block.type == "redacted_thinking":
+            # Redacted thinking blocks must be passed back exactly as received
+            return {
+                "type": "redacted_thinking",
+                "data": block.data or "",
+            }
         return {"type": "text", "text": ""}
 
     def _convert_messages(
@@ -278,13 +292,39 @@ class ClaudeProvider(Provider):
 
         # Add thinking config if enabled
         if enable_thinking:
+            # Validate and adjust budget_tokens
+            budget_tokens = settings.claude_budget_tokens
+
+            # Minimum budget_tokens is 1024
+            if budget_tokens < 1024:
+                logger.warning(f"Thinking mode: budget_tokens {budget_tokens} below minimum 1024, adjusting to 1024")
+                budget_tokens = 1024
+
+            # budget_tokens must be less than max_tokens
+            if budget_tokens >= request.max_tokens:
+                adjusted_budget = request.max_tokens - 1000  # Leave room for response
+                if adjusted_budget < 1024:
+                    adjusted_budget = 1024
+                logger.warning(f"Thinking mode: budget_tokens {budget_tokens} >= max_tokens {request.max_tokens}, adjusting to {adjusted_budget}")
+                budget_tokens = adjusted_budget
+
             kwargs["thinking"] = {
                 "type": "enabled",
-                "budget_tokens": settings.claude_budget_tokens,
+                "budget_tokens": budget_tokens,
             }
             # When thinking is enabled, temperature must be exactly 1
+            if request.temperature is not None and request.temperature != 1.0:
+                logger.warning(f"Thinking mode: temperature {request.temperature} ignored, forced to 1.0")
             kwargs["temperature"] = 1.0
-            logger.info(f"Thinking mode enabled with budget_tokens={settings.claude_budget_tokens}, temperature forced to 1.0")
+            # top_k is NOT compatible with thinking mode - do not set it
+            # top_p can be set between 0.95 and 1.0 when thinking is enabled
+            if request.top_p is not None:
+                # Clamp top_p to valid range for thinking mode
+                clamped_top_p = max(0.95, min(1.0, request.top_p))
+                if clamped_top_p != request.top_p:
+                    logger.warning(f"Thinking mode: top_p clamped from {request.top_p} to {clamped_top_p} (valid range: 0.95-1.0)")
+                kwargs["top_p"] = clamped_top_p
+            logger.info(f"Thinking mode enabled with budget_tokens={budget_tokens}, temperature forced to 1.0")
         else:
             # Only set temperature/top_p when thinking is disabled
             if request.temperature is not None:
@@ -331,6 +371,15 @@ class ClaudeProvider(Provider):
 
         try:
             kwargs = self._build_request_kwargs(request, messages, system)
+
+            # Warn if thinking mode with high max_tokens without streaming
+            # Claude docs: "Streaming is required when max_tokens is greater than 21,333"
+            if "thinking" in kwargs and request.max_tokens > 21333:
+                logger.warning(
+                    f"Thinking mode with max_tokens={request.max_tokens} > 21333 may require streaming. "
+                    "Consider using stream=true to avoid potential timeouts."
+                )
+
             response = await client.messages.create(**kwargs)
             usage = response.usage
             _log_cache_stats(usage)
@@ -346,17 +395,31 @@ class ClaudeProvider(Provider):
                 output_tokens = usage.output_tokens
                 logger.info(f"Usage actual: prompt={input_tokens}, completion={output_tokens}")
 
-            # Extract content and tool calls from response
-            # Note: thinking blocks are logged but not included in OpenAI response
-            # as OpenAI format doesn't have an equivalent field
+            # Extract content, tool calls, and thinking blocks from response
+            # Thinking blocks are cached for tool use continuity but not exposed in OpenAI response
             content = ""
             tool_calls: list[ToolUse] = []
+            thinking_blocks: list[dict[str, Any]] = []
 
             for block in response.content:
                 if block.type == "thinking":
-                    # Log thinking content (not exposed in OpenAI format)
+                    # Collect thinking blocks for caching
                     thinking_text = getattr(block, "thinking", "")
+                    signature = getattr(block, "signature", "")
+                    thinking_blocks.append({
+                        "type": "thinking",
+                        "thinking": thinking_text,
+                        "signature": signature,
+                    })
                     logger.debug(f"Thinking block ({len(thinking_text)} chars): {thinking_text[:200]}...")
+                elif block.type == "redacted_thinking":
+                    # Collect redacted thinking blocks (encrypted for safety)
+                    data = getattr(block, "data", "")
+                    thinking_blocks.append({
+                        "type": "redacted_thinking",
+                        "data": data,
+                    })
+                    logger.debug(f"Redacted thinking block ({len(data)} chars)")
                 elif block.type == "text":
                     content += block.text
                 elif block.type == "tool_use":
@@ -367,6 +430,12 @@ class ClaudeProvider(Provider):
                             input=block.input,
                         )
                     )
+
+            # Cache thinking blocks if there are tool calls (for reasoning continuity)
+            if thinking_blocks and tool_calls:
+                tool_call_ids = [tc.id for tc in tool_calls]
+                cache_thinking_blocks(tool_call_ids, thinking_blocks)
+                logger.info(f"Cached {len(thinking_blocks)} thinking blocks for {len(tool_call_ids)} tool calls")
 
             # Map Claude stop_reason to OpenAI finish_reason
             finish_reason = _map_finish_reason(response.stop_reason)
@@ -412,6 +481,11 @@ class ClaudeProvider(Provider):
                 input_tokens = 0
                 output_tokens = 0
 
+                # Track thinking blocks for caching
+                thinking_blocks: list[dict[str, Any]] = []
+                current_thinking: dict[int, dict[str, Any]] = {}  # index -> thinking data
+                tool_call_ids: list[str] = []
+
                 async for event in stream:
                     if event.type == "message_start":
                         # Capture input tokens and cache stats from message_start
@@ -424,12 +498,25 @@ class ClaudeProvider(Provider):
                         # Check content block type
                         if hasattr(event.content_block, "type"):
                             if event.content_block.type == "thinking":
-                                # Thinking block started - log but don't stream to client
-                                # OpenAI format doesn't have an equivalent field
+                                # Start tracking thinking block
+                                current_thinking[event.index] = {
+                                    "type": "thinking",
+                                    "thinking": "",
+                                    "signature": "",
+                                }
                                 logger.debug(f"Thinking block started at index {event.index}")
+                            elif event.content_block.type == "redacted_thinking":
+                                # Redacted thinking block - get encrypted data directly
+                                data = getattr(event.content_block, "data", "")
+                                thinking_blocks.append({
+                                    "type": "redacted_thinking",
+                                    "data": data,
+                                })
+                                logger.debug(f"Redacted thinking block ({len(data)} chars)")
                             elif event.content_block.type == "tool_use":
-                                # Map block index to tool call index
+                                # Map block index to tool call index and track ID
                                 tool_call_index_map[event.index] = current_tool_index
+                                tool_call_ids.append(event.content_block.id)
                                 yield StreamChunk(
                                     type="tool_call_start",
                                     tool_call=StreamToolCall(
@@ -442,8 +529,14 @@ class ClaudeProvider(Provider):
 
                     elif event.type == "content_block_delta":
                         if hasattr(event.delta, "thinking"):
-                            # Thinking delta - log but don't stream to client
+                            # Accumulate thinking content
+                            if event.index in current_thinking:
+                                current_thinking[event.index]["thinking"] += event.delta.thinking
                             logger.debug(f"Thinking delta: {event.delta.thinking[:100]}...")
+                        elif hasattr(event.delta, "signature"):
+                            # Capture signature for thinking block
+                            if event.index in current_thinking:
+                                current_thinking[event.index]["signature"] = event.delta.signature
                         elif hasattr(event.delta, "text"):
                             # Text content delta
                             yield StreamChunk(type="delta", content=event.delta.text)
@@ -458,12 +551,22 @@ class ClaudeProvider(Provider):
                                 ),
                             )
 
+                    elif event.type == "content_block_stop":
+                        # Finalize thinking block when stopped
+                        if event.index in current_thinking:
+                            thinking_blocks.append(current_thinking.pop(event.index))
+
                     elif event.type == "message_delta":
                         # Get finish reason and output tokens from message delta
                         if hasattr(event.delta, "stop_reason") and event.delta.stop_reason:
                             finish_reason = _map_finish_reason(event.delta.stop_reason)
                         if hasattr(event, "usage") and event.usage:
                             output_tokens = event.usage.output_tokens
+
+                # Cache thinking blocks if there are tool calls
+                if thinking_blocks and tool_call_ids:
+                    cache_thinking_blocks(tool_call_ids, thinking_blocks)
+                    logger.info(f"Stream: Cached {len(thinking_blocks)} thinking blocks for {len(tool_call_ids)} tool calls")
 
                 # Apply usage override if configured
                 logger.info(f"Stream override config: enabled={settings.override_usage}, prompt={settings.override_prompt_tokens}, completion={settings.override_completion_tokens}")

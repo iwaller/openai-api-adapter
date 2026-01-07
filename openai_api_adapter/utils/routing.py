@@ -1,7 +1,7 @@
-from app.config import settings
-from app.exceptions import InvalidRequestError
-from app.providers.base import Provider
-from app.providers.registry import ProviderRegistry
+from openai_api_adapter.config import settings
+from openai_api_adapter.exceptions import InvalidRequestError
+from openai_api_adapter.providers.base import Provider
+from openai_api_adapter.providers.registry import ProviderRegistry
 
 
 def parse_model_with_prefix(model: str) -> tuple[str, str]:

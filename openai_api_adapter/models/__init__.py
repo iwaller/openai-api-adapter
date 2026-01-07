@@ -1,4 +1,4 @@
-from app.models.common import (
+from openai_api_adapter.models.common import (
     ChatRequest,
     ChatResponse,
     ContentBlock,
@@ -7,7 +7,7 @@ from app.models.common import (
     ModelInfo,
     StreamChunk,
 )
-from app.models.openai import (
+from openai_api_adapter.models.openai import (
     OpenAIChatRequest,
     OpenAIChatResponse,
     OpenAIModel,

@@ -2,8 +2,8 @@ import json
 import time
 import uuid
 
-from app.config import settings
-from app.models.common import (
+from openai_api_adapter.config import settings
+from openai_api_adapter.models.common import (
     ChatRequest,
     ChatResponse,
     ContentBlock,
@@ -13,7 +13,9 @@ from app.models.common import (
     ToolResult,
     ToolUse,
 )
-from app.models.openai import (
+from openai_api_adapter.utils.logger import logger
+from openai_api_adapter.utils.thinking_cache import get_thinking_blocks
+from openai_api_adapter.models.openai import (
     OpenAIChatRequest,
     OpenAIChatResponse,
     OpenAIChoice,
@@ -38,6 +40,69 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
     Returns:
         Common ChatRequest format.
     """
+    # Log incoming messages summary for debugging
+    msg_summary = []
+    for m in request.messages:
+        tool_calls_info = None
+        if getattr(m, 'tool_calls', None):
+            tool_calls_info = [tc.id for tc in m.tool_calls]
+        msg_summary.append({
+            'role': m.role,
+            'has_tool_calls': bool(getattr(m, 'tool_calls', None)),
+            'tool_call_ids': tool_calls_info,
+            'tool_call_id': getattr(m, 'tool_call_id', None),
+            'content_preview': str(getattr(m, 'content', ''))[:100] if getattr(m, 'content', None) else None
+        })
+    logger.info(f"Converting {len(request.messages)} OpenAI messages: {msg_summary}")
+
+    # Pre-scan to collect tool_call_ids for each assistant message index
+    # This handles multiple formats: OpenAI tool_calls, Cursor tool_use in content,
+    # and tool_call_ids from following tool/user messages
+    assistant_tool_call_ids: dict[int, list[str]] = {}
+
+    for i, msg in enumerate(request.messages):
+        if msg.role == "assistant":
+            tool_ids = []
+
+            # Source 1: OpenAI format - tool_calls array
+            if getattr(msg, 'tool_calls', None):
+                tool_ids.extend([tc.id for tc in msg.tool_calls])
+
+            # Source 2: Cursor format - tool_use in content parts
+            if isinstance(msg.content, list):
+                for part in msg.content:
+                    if getattr(part, 'type', None) == 'tool_use' and getattr(part, 'id', None):
+                        tool_ids.append(part.id)
+
+            # Source 3: Look at following messages for tool_call_ids
+            for j in range(i + 1, len(request.messages)):
+                next_msg = request.messages[j]
+                if next_msg.role == "assistant":
+                    break  # Stop at next assistant message
+
+                # OpenAI format: role="tool" with tool_call_id
+                if next_msg.role == "tool" and getattr(next_msg, 'tool_call_id', None):
+                    tool_ids.append(next_msg.tool_call_id)
+
+                # Cursor format: tool_result in content parts
+                if isinstance(next_msg.content, list):
+                    for part in next_msg.content:
+                        if getattr(part, 'type', None) == 'tool_result' and getattr(part, 'tool_use_id', None):
+                            tool_ids.append(part.tool_use_id)
+
+            if tool_ids:
+                # Remove duplicates while preserving order
+                seen = set()
+                unique_ids = []
+                for tid in tool_ids:
+                    if tid not in seen:
+                        seen.add(tid)
+                        unique_ids.append(tid)
+                assistant_tool_call_ids[i] = unique_ids
+                logger.info(f"Pre-scan: assistant message at index {i} has tool_call_ids: {unique_ids}")
+
+    logger.info(f"Pre-scan complete: {len(assistant_tool_call_ids)} assistant messages have tool_calls")
+
     messages: list[Message] = []
 
     # Collect consecutive tool results to merge into single user message
@@ -50,7 +115,7 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
             messages.append(Message(role="user", content=pending_tool_results))
             pending_tool_results = []
 
-    for openai_msg in request.messages:
+    for msg_index, openai_msg in enumerate(request.messages):
         # Handle tool response messages - accumulate for merging
         if openai_msg.role == "tool":
             if openai_msg.tool_call_id and openai_msg.content:
@@ -73,34 +138,86 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
         # Flush any pending tool results before processing non-tool message
         flush_tool_results()
 
-        # Handle assistant messages with tool_calls
-        if openai_msg.role == "assistant" and openai_msg.tool_calls:
+        # Handle assistant messages with tool_calls (from pre-scan)
+        # Use pre-scanned tool_call_ids which handles multiple formats
+        tool_call_ids = assistant_tool_call_ids.get(msg_index, [])
+        if openai_msg.role == "assistant" and tool_call_ids:
             content_blocks: list[ContentBlock] = []
 
-            # Add text content if present
-            if openai_msg.content:
-                if isinstance(openai_msg.content, str):
-                    content_blocks.append(
-                        ContentBlock(type="text", text=openai_msg.content)
-                    )
+            # Restore cached thinking blocks from any tool_call_id
+            # All tool calls in the same response share the same thinking blocks
+            logger.info(f"Processing assistant message at index {msg_index} with tool_call_ids: {tool_call_ids}")
+            restored_thinking = False
 
-            # Add tool use blocks
-            for tool_call in openai_msg.tool_calls:
-                try:
-                    input_data = json.loads(tool_call.function.arguments)
-                except json.JSONDecodeError:
-                    input_data = {"raw": tool_call.function.arguments}
+            for tool_call_id in tool_call_ids:
+                thinking_blocks = get_thinking_blocks(tool_call_id)
+                if thinking_blocks:
+                    # Add thinking blocks at the beginning
+                    for block in thinking_blocks:
+                        content_blocks.append(ContentBlock(**block))
+                    logger.info(f"Restored {len(thinking_blocks)} thinking blocks from cache for tool_call_id={tool_call_id}")
+                    restored_thinking = True
+                    break  # All tool_calls share the same thinking blocks
 
-                content_blocks.append(
-                    ContentBlock(
-                        type="tool_use",
-                        tool_use=ToolUse(
-                            id=tool_call.id,
-                            name=tool_call.function.name,
-                            input=input_data,
-                        ),
-                    )
+            # NOTE: Do NOT remove thinking blocks from cache after restoring them!
+            # Each subsequent request will resend the same conversation history and
+            # still need these thinking blocks. Let TTL handle cache expiration.
+            if restored_thinking:
+                logger.info(f"Successfully restored thinking blocks, content_blocks now has {len(content_blocks)} items")
+            else:
+                # No thinking blocks found - this WILL cause errors if thinking mode is enabled
+                # Log at ERROR level since this is a critical issue
+                logger.error(
+                    f"CRITICAL: No thinking blocks found in cache for tool_call_ids: {tool_call_ids}. "
+                    "If thinking mode is enabled on this request, Claude API WILL reject it. "
+                    "Possible causes: (1) cache expired (TTL=1h), (2) server restarted between requests, "
+                    "(3) thinking was disabled on the original request that returned tool_use, "
+                    "(4) load balancer sent request to different server instance."
                 )
+
+            # Add text content if present (string format)
+            if isinstance(openai_msg.content, str) and openai_msg.content:
+                content_blocks.append(
+                    ContentBlock(type="text", text=openai_msg.content)
+                )
+
+            # Add tool use blocks from tool_calls array (OpenAI format)
+            if openai_msg.tool_calls:
+                for tool_call in openai_msg.tool_calls:
+                    try:
+                        input_data = json.loads(tool_call.function.arguments)
+                    except json.JSONDecodeError:
+                        input_data = {"raw": tool_call.function.arguments}
+
+                    content_blocks.append(
+                        ContentBlock(
+                            type="tool_use",
+                            tool_use=ToolUse(
+                                id=tool_call.id,
+                                name=tool_call.function.name,
+                                input=input_data,
+                            ),
+                        )
+                    )
+
+            # Add content from content parts (Cursor format - may include tool_use, text, etc.)
+            if isinstance(openai_msg.content, list):
+                for part in openai_msg.content:
+                    if getattr(part, 'type', None) == 'text' and getattr(part, 'text', None):
+                        content_blocks.append(
+                            ContentBlock(type="text", text=part.text)
+                        )
+                    elif getattr(part, 'type', None) == 'tool_use':
+                        content_blocks.append(
+                            ContentBlock(
+                                type="tool_use",
+                                tool_use=ToolUse(
+                                    id=getattr(part, 'id', '') or '',
+                                    name=getattr(part, 'name', '') or '',
+                                    input=getattr(part, 'input', {}) or {},
+                                ),
+                            )
+                        )
 
             if content_blocks:
                 messages.append(Message(role="assistant", content=content_blocks))
@@ -201,7 +318,6 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
 
     # Convert tools if present (strict parameter is ignored)
     # Supports both OpenAI format and Cursor's direct format
-    from app.utils.logger import logger
     tools: list[ToolDefinition] | None = None
     if request.tools:
         logger.info(f"Request has {len(request.tools)} tools, first tool type: {type(request.tools[0])}")

@@ -7,7 +7,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Copy project files
 COPY pyproject.toml uv.lock ./
-COPY app ./app
+COPY openai_api_adapter ./openai_api_adapter
 
 # Install dependencies
 RUN uv sync --frozen --no-dev
@@ -23,4 +23,4 @@ ENV LOG_LEVEL=INFO
 ENV LOG_DIR=/app/logs
 
 # Run the application
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "6600"]
+CMD ["uv", "run", "uvicorn", "openai_api_adapter.main:app", "--host", "0.0.0.0", "--port", "6600"]

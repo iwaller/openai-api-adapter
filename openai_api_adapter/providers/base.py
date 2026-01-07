@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 
-from app.models.common import ChatRequest, ChatResponse, ModelInfo, StreamChunk
+from openai_api_adapter.models.common import ChatRequest, ChatResponse, ModelInfo, StreamChunk
 
 
 class Provider(ABC):

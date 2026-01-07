@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     claude_base_url: str | None = None
     claude_default_model: str = "claude-opus-4-5"
     claude_budget_tokens: int = 8000  # Budget tokens for thinking mode
+
+    # Thinking cache settings (for preserving thinking blocks during tool use)
+    thinking_cache_ttl: int = 3600  # Cache TTL in seconds (default: 1 hour)
+    thinking_cache_maxsize: int = 10000  # Max number of cached entries
     claude_allowed_models: list[str] = [
         # Claude 4
         "claude-4.5-opus-high-thinking",

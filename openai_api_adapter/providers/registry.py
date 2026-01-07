@@ -1,4 +1,4 @@
-from app.providers.base import Provider
+from openai_api_adapter.providers.base import Provider
 
 
 class ProviderRegistry:

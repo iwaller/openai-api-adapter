@@ -6,7 +6,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
-from app.config import settings
+from openai_api_adapter.config import settings
 
 # Constants
 LOG_FILE_MAX_BYTES = 10 * 1024 * 1024  # 10MB

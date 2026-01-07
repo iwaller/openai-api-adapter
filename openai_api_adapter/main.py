@@ -7,11 +7,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.config import settings
-from app.exceptions import ProviderError
-from app.providers.claude import ClaudeProvider
-from app.providers.registry import ProviderRegistry
-from app.routes import chat, models
+from openai_api_adapter.config import settings
+from openai_api_adapter.exceptions import ProviderError
+from openai_api_adapter.providers.claude import ClaudeProvider
+from openai_api_adapter.providers.registry import ProviderRegistry
+from openai_api_adapter.routes import chat, models
 
 
 @asynccontextmanager
@@ -56,7 +56,7 @@ app.add_middleware(
 @app.exception_handler(ProviderError)
 async def provider_error_handler(request: Request, exc: ProviderError):
     """Convert provider errors to OpenAI error format."""
-    from app.utils.logger import logger
+    from openai_api_adapter.utils.logger import logger
     logger.error(f"ProviderError: status={exc.status_code}, type={exc.error_type}, message={exc.message}")
     return JSONResponse(
         status_code=exc.status_code,
@@ -90,7 +90,7 @@ async def anthropic_auth_handler(request: Request, exc: AnthropicAuthError):
 @app.exception_handler(AnthropicAPIError)
 async def anthropic_api_handler(request: Request, exc: AnthropicAPIError):
     """Map Anthropic SDK errors to OpenAI format."""
-    from app.utils.logger import logger
+    from openai_api_adapter.utils.logger import logger
     status_code = getattr(exc, "status_code", 500)
     logger.error(f"AnthropicAPIError: status={status_code}, message={exc}")
     return JSONResponse(
@@ -109,7 +109,7 @@ async def anthropic_api_handler(request: Request, exc: AnthropicAPIError):
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request: Request, exc: RequestValidationError):
     """Convert FastAPI validation errors to OpenAI format."""
-    from app.utils.logger import logger
+    from openai_api_adapter.utils.logger import logger
     errors = exc.errors()
     logger.error(f"RequestValidationError: {errors}")
     # Get the first error for the message
@@ -134,7 +134,7 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 @app.exception_handler(Exception)
 async def general_error_handler(request: Request, exc: Exception):
     """Catch-all error handler with logging."""
-    from app.utils.logger import logger
+    from openai_api_adapter.utils.logger import logger
     import traceback
     logger.error(f"Unhandled exception: {type(exc).__name__}: {exc}")
     logger.error(f"Traceback: {traceback.format_exc()}")

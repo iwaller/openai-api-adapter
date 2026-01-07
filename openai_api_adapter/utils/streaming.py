@@ -3,10 +3,10 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 
-from app.config import settings
-from app.models.common import ChatRequest, StreamChunk
-from app.providers.base import Provider
-from app.utils.logger import log_response, log_stream_chunk, log_stream_end, log_stream_start
+from openai_api_adapter.config import settings
+from openai_api_adapter.models.common import ChatRequest, StreamChunk
+from openai_api_adapter.providers.base import Provider
+from openai_api_adapter.utils.logger import log_response, log_stream_chunk, log_stream_end, log_stream_start
 
 # Max content size to accumulate for logging (to prevent unbounded memory growth)
 MAX_LOG_CONTENT_SIZE = 50000  # 50KB

@@ -27,13 +27,18 @@ class ToolResult(BaseModel):
 
 
 class ContentBlock(BaseModel):
-    """Content block that can be text, image, tool_use, or tool_result."""
+    """Content block that can be text, image, tool_use, tool_result, thinking, or redacted_thinking."""
 
-    type: Literal["text", "image", "tool_use", "tool_result"]
+    type: Literal["text", "image", "tool_use", "tool_result", "thinking", "redacted_thinking"]
     text: str | None = None
     source: ImageSource | None = None
     tool_use: ToolUse | None = None
     tool_result: ToolResult | None = None
+    # Thinking block fields (for Claude extended thinking)
+    thinking: str | None = None
+    signature: str | None = None
+    # Redacted thinking block field (encrypted content for safety)
+    data: str | None = None
 
 
 class Message(BaseModel):
