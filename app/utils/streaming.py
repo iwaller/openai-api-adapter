@@ -199,7 +199,8 @@ async def stream_generator(
                 yield f"data: {json.dumps(data)}\n\n"
 
                 # Always send usage chunk (some clients expect it even without stream_options)
-                if input_tokens > 0 or output_tokens > 0:
+                # Send even if tokens are 0 to ensure override values are reported
+                if input_tokens > 0 or output_tokens > 0 or settings.override_usage:
                     usage_data = {
                         "id": chat_id,
                         "object": "chat.completion.chunk",

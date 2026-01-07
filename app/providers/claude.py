@@ -324,13 +324,15 @@ class ClaudeProvider(Provider):
             _log_cache_stats(usage)
 
             # Apply usage override if configured
+            logger.info(f"Override config: enabled={settings.override_usage}, prompt={settings.override_prompt_tokens}, completion={settings.override_completion_tokens}")
             if settings.override_usage:
                 input_tokens = settings.override_prompt_tokens
                 output_tokens = settings.override_completion_tokens
-                logger.debug(f"Usage override: prompt={input_tokens}, completion={output_tokens}")
+                logger.info(f"Usage override applied: prompt={input_tokens}, completion={output_tokens}")
             else:
                 input_tokens = usage.input_tokens
                 output_tokens = usage.output_tokens
+                logger.info(f"Usage actual: prompt={input_tokens}, completion={output_tokens}")
 
             # Extract content and tool calls from response
             content = ""
@@ -439,10 +441,11 @@ class ClaudeProvider(Provider):
                             output_tokens = event.usage.output_tokens
 
                 # Apply usage override if configured
+                logger.info(f"Stream override config: enabled={settings.override_usage}, prompt={settings.override_prompt_tokens}, completion={settings.override_completion_tokens}")
                 if settings.override_usage:
                     input_tokens = settings.override_prompt_tokens
                     output_tokens = settings.override_completion_tokens
-                    logger.debug(f"Usage override (stream): prompt={input_tokens}, completion={output_tokens}")
+                    logger.info(f"Stream usage override applied: prompt={input_tokens}, completion={output_tokens}")
 
                 # Send stop chunk with finish reason and usage
                 yield StreamChunk(
