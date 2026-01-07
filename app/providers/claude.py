@@ -303,8 +303,16 @@ class ClaudeProvider(Provider):
         if tools:
             kwargs["tools"] = tools
             # Add tool_choice if specified (default to auto if tools present)
+            # Note: When thinking is enabled, only "auto" or "none" are allowed
             if request.tool_choice:
-                kwargs["tool_choice"] = request.tool_choice
+                tool_choice = request.tool_choice
+                # When thinking is enabled, force to "auto" if incompatible choice
+                if enable_thinking:
+                    choice_type = tool_choice.get("type") if isinstance(tool_choice, dict) else None
+                    if choice_type not in ("auto", "none"):
+                        logger.warning(f"Thinking mode only supports tool_choice 'auto' or 'none', got '{choice_type}'. Forcing to 'auto'.")
+                        tool_choice = {"type": "auto"}
+                kwargs["tool_choice"] = tool_choice
             else:
                 kwargs["tool_choice"] = {"type": "auto"}
 
@@ -339,11 +347,17 @@ class ClaudeProvider(Provider):
                 logger.info(f"Usage actual: prompt={input_tokens}, completion={output_tokens}")
 
             # Extract content and tool calls from response
+            # Note: thinking blocks are logged but not included in OpenAI response
+            # as OpenAI format doesn't have an equivalent field
             content = ""
             tool_calls: list[ToolUse] = []
 
             for block in response.content:
-                if block.type == "text":
+                if block.type == "thinking":
+                    # Log thinking content (not exposed in OpenAI format)
+                    thinking_text = getattr(block, "thinking", "")
+                    logger.debug(f"Thinking block ({len(thinking_text)} chars): {thinking_text[:200]}...")
+                elif block.type == "text":
                     content += block.text
                 elif block.type == "tool_use":
                     tool_calls.append(
@@ -407,9 +421,13 @@ class ClaudeProvider(Provider):
                             _log_cache_stats(usage)
 
                     elif event.type == "content_block_start":
-                        # Check if this is a tool use block
+                        # Check content block type
                         if hasattr(event.content_block, "type"):
-                            if event.content_block.type == "tool_use":
+                            if event.content_block.type == "thinking":
+                                # Thinking block started - log but don't stream to client
+                                # OpenAI format doesn't have an equivalent field
+                                logger.debug(f"Thinking block started at index {event.index}")
+                            elif event.content_block.type == "tool_use":
                                 # Map block index to tool call index
                                 tool_call_index_map[event.index] = current_tool_index
                                 yield StreamChunk(
@@ -423,7 +441,10 @@ class ClaudeProvider(Provider):
                                 current_tool_index += 1
 
                     elif event.type == "content_block_delta":
-                        if hasattr(event.delta, "text"):
+                        if hasattr(event.delta, "thinking"):
+                            # Thinking delta - log but don't stream to client
+                            logger.debug(f"Thinking delta: {event.delta.thinking[:100]}...")
+                        elif hasattr(event.delta, "text"):
                             # Text content delta
                             yield StreamChunk(type="delta", content=event.delta.text)
                         elif hasattr(event.delta, "partial_json"):
