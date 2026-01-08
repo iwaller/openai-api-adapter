@@ -22,6 +22,6 @@ Dockerfile
 compose.yaml
 .dockerignore
 
-# Docs
-README.md
+# Docs (keep README.md for pyproject.toml)
 *.md
+!README.md

@@ -301,12 +301,25 @@ class ClaudeProvider(Provider):
                 budget_tokens = 1024
 
             # budget_tokens must be less than max_tokens
+            # Minimum max_tokens for thinking mode: 1025 (to allow budget_tokens >= 1024)
+            MIN_MAX_TOKENS_FOR_THINKING = 1025
+            if request.max_tokens < MIN_MAX_TOKENS_FOR_THINKING:
+                logger.warning(
+                    f"Thinking mode: max_tokens ({request.max_tokens}) too small, "
+                    f"increasing to {MIN_MAX_TOKENS_FOR_THINKING}"
+                )
+                request.max_tokens = MIN_MAX_TOKENS_FOR_THINKING
+                kwargs["max_tokens"] = MIN_MAX_TOKENS_FOR_THINKING  # Update kwargs too
+
+            # API requires budget_tokens < max_tokens; use 95% as practical limit to leave room for output
+            max_budget = int(request.max_tokens * 0.95)
             if budget_tokens >= request.max_tokens:
-                adjusted_budget = request.max_tokens - 1000  # Leave room for response
-                if adjusted_budget < 1024:
-                    adjusted_budget = 1024
+                adjusted_budget = max(1024, max_budget)
                 logger.warning(f"Thinking mode: budget_tokens {budget_tokens} >= max_tokens {request.max_tokens}, adjusting to {adjusted_budget}")
                 budget_tokens = adjusted_budget
+            elif budget_tokens > max_budget:
+                logger.info(f"Thinking mode: budget_tokens {budget_tokens} > 95% of max_tokens, capping to {max_budget}")
+                budget_tokens = max_budget
 
             kwargs["thinking"] = {
                 "type": "enabled",
@@ -385,15 +398,13 @@ class ClaudeProvider(Provider):
             _log_cache_stats(usage)
 
             # Apply usage override if configured
-            logger.info(f"Override config: enabled={settings.override_usage}, prompt={settings.override_prompt_tokens}, completion={settings.override_completion_tokens}")
             if settings.override_usage:
                 input_tokens = settings.override_prompt_tokens
                 output_tokens = settings.override_completion_tokens
-                logger.info(f"Usage override applied: prompt={input_tokens}, completion={output_tokens}")
+                logger.debug(f"Usage override applied: prompt={input_tokens}, completion={output_tokens}")
             else:
                 input_tokens = usage.input_tokens
                 output_tokens = usage.output_tokens
-                logger.info(f"Usage actual: prompt={input_tokens}, completion={output_tokens}")
 
             # Extract content, tool calls, and thinking blocks from response
             # Thinking blocks are cached for tool use continuity but not exposed in OpenAI response
@@ -464,8 +475,14 @@ class ClaudeProvider(Provider):
         self, request: ChatRequest, api_key: str
     ) -> AsyncIterator[StreamChunk]:
         """Streaming chat completion with tool call support."""
+        import time
+
         client = self._get_client(api_key)
         messages, system = self._extract_system(request.messages)
+
+        # Safety limits to prevent runaway streams
+        MAX_EVENTS = 50000  # Safety limit
+        MAX_STREAM_DURATION = 600  # 10 minutes max total stream duration
 
         try:
             kwargs = self._build_request_kwargs(request, messages, system)
@@ -486,7 +503,25 @@ class ClaudeProvider(Provider):
                 current_thinking: dict[int, dict[str, Any]] = {}  # index -> thinking data
                 tool_call_ids: list[str] = []
 
+                # Track event count and timing for safety
+                event_count = 0
+                stream_start_time = time.monotonic()
+
                 async for event in stream:
+                    event_count += 1
+
+                    # Safety checks - use "length" finish_reason to signal truncation
+                    if event_count > MAX_EVENTS:
+                        logger.error(f"Stream exceeded max events ({MAX_EVENTS}), terminating")
+                        finish_reason = "length"  # Signal truncation to client
+                        break
+
+                    elapsed = time.monotonic() - stream_start_time
+                    if elapsed > MAX_STREAM_DURATION:
+                        logger.error(f"Stream exceeded max duration ({MAX_STREAM_DURATION}s), terminating after {event_count} events")
+                        finish_reason = "length"  # Signal truncation to client
+                        break
+
                     if event.type == "message_start":
                         # Capture input tokens and cache stats from message_start
                         if hasattr(event.message, "usage"):
@@ -568,12 +603,15 @@ class ClaudeProvider(Provider):
                     cache_thinking_blocks(tool_call_ids, thinking_blocks)
                     logger.info(f"Stream: Cached {len(thinking_blocks)} thinking blocks for {len(tool_call_ids)} tool calls")
 
+                # Log stream completion stats
+                stream_duration = time.monotonic() - stream_start_time
+                logger.info(f"Stream completed: events={event_count}, duration={stream_duration:.2f}s, tool_calls={len(tool_call_ids)}")
+
                 # Apply usage override if configured
-                logger.info(f"Stream override config: enabled={settings.override_usage}, prompt={settings.override_prompt_tokens}, completion={settings.override_completion_tokens}")
                 if settings.override_usage:
                     input_tokens = settings.override_prompt_tokens
                     output_tokens = settings.override_completion_tokens
-                    logger.info(f"Stream usage override applied: prompt={input_tokens}, completion={output_tokens}")
+                    logger.debug(f"Stream usage override applied: prompt={input_tokens}, completion={output_tokens}")
 
                 # Send stop chunk with finish reason and usage
                 yield StreamChunk(
