@@ -3,12 +3,15 @@ from contextlib import asynccontextmanager
 from anthropic import APIError as AnthropicAPIError
 from anthropic import AuthenticationError as AnthropicAuthError
 from fastapi import FastAPI, Request
+from openai import APIError as OpenAIAPIError
+from openai import AuthenticationError as OpenAIAuthError
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from openai_api_adapter.config import settings
 from openai_api_adapter.exceptions import ProviderError
+from openai_api_adapter.providers.aiberm import AibermProvider
 from openai_api_adapter.providers.claude import ClaudeProvider
 from openai_api_adapter.providers.registry import ProviderRegistry
 from openai_api_adapter.routes import chat, models
@@ -21,6 +24,10 @@ async def lifespan(app: FastAPI):
     ProviderRegistry.register(
         ClaudeProvider(),
         default=(settings.default_provider == "claude"),
+    )
+    ProviderRegistry.register(
+        AibermProvider(),
+        default=(settings.default_provider == "aiberm"),
     )
 
     if settings.debug:
@@ -93,6 +100,41 @@ async def anthropic_api_handler(request: Request, exc: AnthropicAPIError):
     from openai_api_adapter.utils.logger import logger
     status_code = getattr(exc, "status_code", 500)
     logger.error(f"AnthropicAPIError: status={status_code}, message={exc}")
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "error": {
+                "type": "api_error",
+                "message": str(exc),
+                "code": None,
+                "param": None,
+            }
+        },
+    )
+
+
+@app.exception_handler(OpenAIAuthError)
+async def openai_auth_handler(request: Request, exc: OpenAIAuthError):
+    """Map OpenAI SDK auth errors to OpenAI format."""
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": {
+                "type": "authentication_error",
+                "message": str(exc),
+                "code": "invalid_api_key",
+                "param": None,
+            }
+        },
+    )
+
+
+@app.exception_handler(OpenAIAPIError)
+async def openai_api_handler(request: Request, exc: OpenAIAPIError):
+    """Map OpenAI SDK errors to OpenAI format."""
+    from openai_api_adapter.utils.logger import logger
+    status_code = getattr(exc, "status_code", 500)
+    logger.error(f"OpenAIAPIError: status={status_code}, message={exc}")
     return JSONResponse(
         status_code=status_code,
         content={

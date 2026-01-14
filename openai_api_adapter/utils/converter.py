@@ -44,15 +44,20 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
     msg_summary = []
     for m in request.messages:
         tool_calls_info = None
-        if getattr(m, 'tool_calls', None):
-            tool_calls_info = [tc.id for tc in m.tool_calls]
-        msg_summary.append({
-            'role': m.role,
-            'has_tool_calls': bool(getattr(m, 'tool_calls', None)),
-            'tool_call_ids': tool_calls_info,
-            'tool_call_id': getattr(m, 'tool_call_id', None),
-            'content_preview': str(getattr(m, 'content', ''))[:100] if getattr(m, 'content', None) else None
-        })
+        tool_calls = getattr(m, "tool_calls", None) or []
+        if tool_calls:
+            tool_calls_info = [tc.id for tc in tool_calls]
+        msg_summary.append(
+            {
+                "role": m.role,
+                "has_tool_calls": bool(getattr(m, "tool_calls", None)),
+                "tool_call_ids": tool_calls_info,
+                "tool_call_id": getattr(m, "tool_call_id", None),
+                "content_preview": str(getattr(m, "content", ""))[:100]
+                if getattr(m, "content", None)
+                else None,
+            }
+        )
     logger.info(f"Converting {len(request.messages)} OpenAI messages: {msg_summary}")
 
     # Pre-scan to collect tool_call_ids for each assistant message index
@@ -65,13 +70,15 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
             tool_ids = []
 
             # Source 1: OpenAI format - tool_calls array
-            if getattr(msg, 'tool_calls', None):
-                tool_ids.extend([tc.id for tc in msg.tool_calls])
+            tool_calls = getattr(msg, "tool_calls", None) or []
+            tool_ids.extend([tc.id for tc in tool_calls])
 
             # Source 2: Cursor format - tool_use in content parts
             if isinstance(msg.content, list):
                 for part in msg.content:
-                    if getattr(part, 'type', None) == 'tool_use' and getattr(part, 'id', None):
+                    if getattr(part, "type", None) == "tool_use" and getattr(
+                        part, "id", None
+                    ):
                         tool_ids.append(part.id)
 
             # Source 3: Look at following messages for tool_call_ids
@@ -81,13 +88,15 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
                     break  # Stop at next assistant message
 
                 # OpenAI format: role="tool" with tool_call_id
-                if next_msg.role == "tool" and getattr(next_msg, 'tool_call_id', None):
+                if next_msg.role == "tool" and getattr(next_msg, "tool_call_id", None):
                     tool_ids.append(next_msg.tool_call_id)
 
                 # Cursor format: tool_result in content parts
                 if isinstance(next_msg.content, list):
                     for part in next_msg.content:
-                        if getattr(part, 'type', None) == 'tool_result' and getattr(part, 'tool_use_id', None):
+                        if getattr(part, "type", None) == "tool_result" and getattr(
+                            part, "tool_use_id", None
+                        ):
                             tool_ids.append(part.tool_use_id)
 
             if tool_ids:
@@ -99,9 +108,13 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
                         seen.add(tid)
                         unique_ids.append(tid)
                 assistant_tool_call_ids[i] = unique_ids
-                logger.info(f"Pre-scan: assistant message at index {i} has tool_call_ids: {unique_ids}")
+                logger.info(
+                    f"Pre-scan: assistant message at index {i} has tool_call_ids: {unique_ids}"
+                )
 
-    logger.info(f"Pre-scan complete: {len(assistant_tool_call_ids)} assistant messages have tool_calls")
+    logger.info(
+        f"Pre-scan complete: {len(assistant_tool_call_ids)} assistant messages have tool_calls"
+    )
 
     messages: list[Message] = []
 
@@ -146,7 +159,9 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
 
             # Restore cached thinking blocks from any tool_call_id
             # All tool calls in the same response share the same thinking blocks
-            logger.info(f"Processing assistant message at index {msg_index} with tool_call_ids: {tool_call_ids}")
+            logger.info(
+                f"Processing assistant message at index {msg_index} with tool_call_ids: {tool_call_ids}"
+            )
             restored_thinking = False
 
             for tool_call_id in tool_call_ids:
@@ -155,7 +170,9 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
                     # Add thinking blocks at the beginning
                     for block in thinking_blocks:
                         content_blocks.append(ContentBlock(**block))
-                    logger.info(f"Restored {len(thinking_blocks)} thinking blocks from cache for tool_call_id={tool_call_id}")
+                    logger.info(
+                        f"Restored {len(thinking_blocks)} thinking blocks from cache for tool_call_id={tool_call_id}"
+                    )
                     restored_thinking = True
                     break  # All tool_calls share the same thinking blocks
 
@@ -163,7 +180,9 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
             # Each subsequent request will resend the same conversation history and
             # still need these thinking blocks. Let TTL handle cache expiration.
             if restored_thinking:
-                logger.info(f"Successfully restored thinking blocks, content_blocks now has {len(content_blocks)} items")
+                logger.info(
+                    f"Successfully restored thinking blocks, content_blocks now has {len(content_blocks)} items"
+                )
             else:
                 # No thinking blocks found - this WILL cause errors if thinking mode is enabled
                 # Log at ERROR level since this is a critical issue
@@ -203,18 +222,18 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
             # Add content from content parts (Cursor format - may include tool_use, text, etc.)
             if isinstance(openai_msg.content, list):
                 for part in openai_msg.content:
-                    if getattr(part, 'type', None) == 'text' and getattr(part, 'text', None):
-                        content_blocks.append(
-                            ContentBlock(type="text", text=part.text)
-                        )
-                    elif getattr(part, 'type', None) == 'tool_use':
+                    if getattr(part, "type", None) == "text" and getattr(
+                        part, "text", None
+                    ):
+                        content_blocks.append(ContentBlock(type="text", text=part.text))
+                    elif getattr(part, "type", None) == "tool_use":
                         content_blocks.append(
                             ContentBlock(
                                 type="tool_use",
                                 tool_use=ToolUse(
-                                    id=getattr(part, 'id', '') or '',
-                                    name=getattr(part, 'name', '') or '',
-                                    input=getattr(part, 'input', {}) or {},
+                                    id=getattr(part, "id", "") or "",
+                                    name=getattr(part, "name", "") or "",
+                                    input=getattr(part, "input", {}) or {},
                                 ),
                             )
                         )
@@ -225,9 +244,7 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
 
         # Handle regular messages
         if isinstance(openai_msg.content, str):
-            messages.append(
-                Message(role=openai_msg.role, content=openai_msg.content)
-            )
+            messages.append(Message(role=openai_msg.role, content=openai_msg.content))
         elif openai_msg.content:
             # Convert content parts, stripping audio
             content_blocks: list[ContentBlock] = []
@@ -320,7 +337,9 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
     # Supports both OpenAI format and Cursor's direct format
     tools: list[ToolDefinition] | None = None
     if request.tools:
-        logger.info(f"Request has {len(request.tools)} tools, first tool type: {type(request.tools[0])}")
+        logger.info(
+            f"Request has {len(request.tools)} tools, first tool type: {type(request.tools[0])}"
+        )
         if request.tools:
             first_tool = request.tools[0]
             logger.debug(f"First tool content: {first_tool}")
@@ -331,7 +350,9 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
                 tool_dict = tool
             else:
                 # Pydantic model - convert to dict first
-                tool_dict = tool.model_dump() if hasattr(tool, "model_dump") else dict(tool)
+                tool_dict = (
+                    tool.model_dump() if hasattr(tool, "model_dump") else dict(tool)
+                )
 
             # Check for standard OpenAI format: {"type": "function", "function": {...}}
             if tool_dict.get("type") == "function" and tool_dict.get("function"):
@@ -377,18 +398,17 @@ def convert_openai_to_common(request: OpenAIChatRequest, model: str) -> ChatRequ
         if not stop_sequences:
             stop_sequences = None
 
-    # Convert tool_choice to Claude format (use dict format for consistency)
+    # Convert tool_choice to internal Claude-style dict format
     # OpenAI: "auto", "none", "required", or {"type": "function", "function": {"name": "..."}}
-    # Claude: {"type": "auto"}, {"type": "any"}, {"type": "none"}, or {"type": "tool", "name": "..."}
+    # Internal: {"type": "auto"}, {"type": "any"}, {"type": "none"}, or {"type": "tool", "name": "..."}
     tool_choice = None
     if request.tool_choice:
         if isinstance(request.tool_choice, str):
             if request.tool_choice == "required":
-                tool_choice = {"type": "any"}  # Claude equivalent
+                tool_choice = {"type": "any"}
             elif request.tool_choice in ("auto", "none"):
                 tool_choice = {"type": request.tool_choice}
         elif isinstance(request.tool_choice, dict):
-            # {"type": "function", "function": {"name": "..."}} -> {"type": "tool", "name": "..."}
             func = request.tool_choice.get("function", {})
             if func.get("name"):
                 tool_choice = {"type": "tool", "name": func["name"]}

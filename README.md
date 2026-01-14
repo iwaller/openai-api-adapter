@@ -1,6 +1,6 @@
 # OpenAI API Adapter
 
-OpenAI-compatible API adapter for multiple AI providers. Currently supports Claude (Anthropic) with a design that allows easy extension to other providers.
+OpenAI-compatible API adapter for multiple AI providers. Currently supports Claude (Anthropic) and OpenAI-compatible APIs (like Aiberm) with a design that allows easy extension to other providers.
 
 ## Features
 
@@ -80,8 +80,11 @@ Configuration via environment variables or `.env` file:
 | `OVERRIDE_USAGE` | `false` | Override reported token usage |
 | `OVERRIDE_PROMPT_TOKENS` | `0` | Fixed prompt tokens (when override enabled) |
 | `OVERRIDE_COMPLETION_TOKENS` | `0` | Fixed completion tokens (when override enabled) |
+| `AIBERM_BASE_URL` | `None` | Aiberm API endpoint (required for aiberm provider) |
+| `AIBERM_DEFAULT_MODEL` | `gpt-4o` | Default Aiberm model |
+| `AIBERM_ALLOWED_MODELS` | See below | Allowed Aiberm model list |
 
-### Default Allowed Models
+### Claude Allowed Models
 
 ```
 claude-4.5-opus-high-thinking
@@ -89,6 +92,16 @@ claude-4.5-opus
 claude-opus-4-5
 claude-sonnet-4-5
 claude-haiku-4-5
+```
+
+### Aiberm Allowed Models
+
+```
+gpt-4o
+gpt-4o-mini
+gpt-4-turbo
+gpt-4
+gpt-3.5-turbo
 ```
 
 ### Extended Thinking Mode
@@ -151,9 +164,29 @@ Route to specific providers using prefixes:
 # Explicit Claude routing
 "model": "claude/claude-opus-4-5"
 
+# Explicit Aiberm routing
+"model": "aiberm/gpt-4o"
+
 # Default provider (no prefix)
 "model": "claude-opus-4-5"
 ```
+
+### Aiberm Provider
+
+Aiberm is an OpenAI-compatible API provider that doesn't support the `max_completion_tokens` parameter. This adapter automatically filters out unsupported parameters.
+
+```bash
+curl http://localhost:6600/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "model": "aiberm/gpt-4o",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "max_completion_tokens": 1000
+  }'
+```
+
+The `max_completion_tokens` parameter will be automatically converted to `max_tokens` before forwarding to the Aiberm API.
 
 ### List Models
 
@@ -219,8 +252,10 @@ openai-api-adapter/
 │   ├── exceptions.py        # Custom exceptions
 │   ├── providers/
 │   │   ├── base.py          # Provider abstract class
+│   │   ├── openai_base.py   # OpenAI-compatible provider base class
 │   │   ├── registry.py      # Provider registry
-│   │   └── claude.py        # Claude implementation
+│   │   ├── claude.py        # Claude implementation
+│   │   └── aiberm.py        # Aiberm implementation (OpenAI-compatible)
 │   ├── models/
 │   │   ├── common.py        # Internal models
 │   │   └── openai.py        # OpenAI-compatible models
@@ -242,7 +277,65 @@ openai-api-adapter/
 
 ## Adding New Providers
 
-1. Create a new provider in `openai_api_adapter/providers/`:
+### Adding OpenAI-Compatible Providers (Recommended)
+
+For providers that use OpenAI-compatible APIs, extend `OpenAIBaseProvider`:
+
+1. Add configuration in `openai_api_adapter/config.py`:
+
+```python
+# MyProvider settings
+myprovider_base_url: str | None = None
+myprovider_default_model: str = "default-model"
+myprovider_allowed_models: list[str] = ["model-1", "model-2"]
+```
+
+2. Create provider in `openai_api_adapter/providers/myprovider.py`:
+
+```python
+from openai_api_adapter.config import settings
+from openai_api_adapter.providers.openai_base import OpenAIBaseProvider
+
+class MyProvider(OpenAIBaseProvider):
+    @property
+    def name(self) -> str:
+        return "myprovider"
+
+    def _get_base_url(self) -> str | None:
+        return settings.myprovider_base_url
+
+    def _get_allowed_models(self) -> list[str]:
+        return settings.myprovider_allowed_models
+
+    def _get_default_model(self) -> str:
+        return settings.myprovider_default_model
+
+    def _filter_request_kwargs(self, kwargs: dict) -> dict:
+        """Optional: Filter or modify request parameters."""
+        # Example: Remove unsupported parameters
+        kwargs.pop("unsupported_param", None)
+        # Example: Add custom parameters
+        kwargs["custom_param"] = "value"
+        return kwargs
+```
+
+3. Register in `openai_api_adapter/main.py`:
+
+```python
+from openai_api_adapter.providers.myprovider import MyProvider
+
+ProviderRegistry.register(MyProvider())
+```
+
+4. Use with model prefix:
+
+```bash
+"model": "myprovider/model-name"
+```
+
+### Adding Custom Providers
+
+For providers with non-OpenAI APIs (like Claude), extend `Provider` directly:
 
 ```python
 from openai_api_adapter.providers.base import Provider
@@ -263,20 +356,6 @@ class MyProvider(Provider):
     def list_models(self) -> list[ModelInfo]:
         # Implementation
         pass
-```
-
-2. Register in `openai_api_adapter/main.py`:
-
-```python
-from openai_api_adapter.providers.myprovider import MyProvider
-
-ProviderRegistry.register(MyProvider())
-```
-
-3. Use with model prefix:
-
-```bash
-"model": "myprovider/model-name"
 ```
 
 ## Development

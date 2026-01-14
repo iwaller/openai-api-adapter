@@ -43,6 +43,17 @@ class Settings(BaseSettings):
         "claude-haiku-4-5",
     ]
 
+    # Aiberm settings (OpenAI-compatible API that doesn't support max_completion_tokens)
+    aiberm_base_url: str | None = None
+    aiberm_default_model: str = "gpt-4o"
+    aiberm_allowed_models: list[str] = [
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gpt-4-turbo",
+        "gpt-4",
+        "gpt-3.5-turbo",
+    ]
+
     model_config = {
         "env_file": ".env",
         "env_prefix": "",

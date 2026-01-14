@@ -8,6 +8,7 @@ dependencies = [
     "anthropic>=0.75.0",
     "cachetools>=5.5.0",
     "fastapi>=0.128.0",
+    "openai>=1.50.0",
     "pydantic-settings>=2.12.0",
     "uvicorn>=0.40.0",
 ]

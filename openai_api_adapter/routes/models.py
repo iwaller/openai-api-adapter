@@ -16,6 +16,7 @@ async def list_models() -> OpenAIModelsResponse:
     """
     models: list[OpenAIModel] = []
 
+    default_provider = ProviderRegistry.get().name
     for provider_name in ProviderRegistry.list_providers():
         provider = ProviderRegistry.get(provider_name)
 
@@ -30,14 +31,15 @@ async def list_models() -> OpenAIModelsResponse:
                 )
             )
 
-            # Also add without prefix for default provider convenience
-            models.append(
-                OpenAIModel(
-                    id=model_info.id,
-                    object="model",
-                    created=0,
-                    owned_by=model_info.owned_by,
+            # Only add without prefix for default provider convenience
+            if provider_name == default_provider:
+                models.append(
+                    OpenAIModel(
+                        id=model_info.id,
+                        object="model",
+                        created=0,
+                        owned_by=model_info.owned_by,
+                    )
                 )
-            )
 
     return OpenAIModelsResponse(object="list", data=models)

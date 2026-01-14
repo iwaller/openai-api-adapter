@@ -8,4 +8,6 @@ services:
       - DEBUG=false
       - DEFAULT_PROVIDER=claude
       # - CLAUDE_BASE_URL=https://api.anthropic.com
+      # Aiberm settings
+      # - AIBERM_BASE_URL=https://your-aiberm-api.com/v1
     restart: unless-stopped
