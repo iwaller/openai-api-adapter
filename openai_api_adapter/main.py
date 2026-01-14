@@ -223,7 +223,7 @@ def main():
         print(f"Claude base URL: {settings.claude_base_url}")
 
     uvicorn.run(
-        "app.main:app",
+        "openai_api_adapter.main:app",
         host="0.0.0.0",
         port=settings.port,
         reload=settings.debug,
