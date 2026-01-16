@@ -24,7 +24,8 @@ class Settings(BaseSettings):
     override_completion_tokens: int = 0
 
     # Provider settings
-    default_provider: str = "claude"
+    default_provider: str = "aiberm"
+    enabled_providers: str = "aiberm"  # Comma-separated list of providers to enable, or "all" for all providers
 
     # Claude settings
     claude_base_url: str | None = None
@@ -47,11 +48,7 @@ class Settings(BaseSettings):
     aiberm_base_url: str | None = None
     aiberm_default_model: str = "gpt-4o"
     aiberm_allowed_models: list[str] = [
-        "gpt-4o",
-        "gpt-4o-mini",
-        "gpt-4-turbo",
-        "gpt-4",
-        "gpt-3.5-turbo",
+        "openai/gpt-5.2-codex",
     ]
 
     model_config = {
@@ -59,6 +56,41 @@ class Settings(BaseSettings):
         "env_prefix": "",
         "env_nested_delimiter": "__",
     }
+
+    def get_enabled_providers(self) -> list[str]:
+        """Parse enabled_providers setting into a list of provider names.
+
+        Returns:
+            List of provider names to enable. If "all" is specified, returns all available providers.
+        """
+        # Import here to avoid circular dependency
+        from openai_api_adapter.providers import AVAILABLE_PROVIDERS
+
+        known_providers = set(AVAILABLE_PROVIDERS.keys())
+
+        if self.enabled_providers.strip().lower() == "all":
+            return list(known_providers)
+
+        # Split by comma and strip whitespace
+        providers = [p.strip() for p in self.enabled_providers.split(",") if p.strip()]
+
+        # Validate provider names
+        invalid = set(providers) - known_providers
+        if invalid:
+            import logging
+            logging.warning(f"Unknown providers will be ignored: {invalid}")
+
+        # Filter to valid providers only
+        valid_providers = [p for p in providers if p in known_providers]
+
+        # If no valid providers, default to the first available provider
+        if not valid_providers:
+            import logging
+            default = list(known_providers)[0] if known_providers else "claude"
+            logging.warning(f"No valid providers in ENABLED_PROVIDERS, defaulting to '{default}'")
+            return [default]
+
+        return valid_providers
 
 
 settings = Settings()

@@ -11,8 +11,7 @@ from fastapi.responses import JSONResponse
 
 from openai_api_adapter.config import settings
 from openai_api_adapter.exceptions import ProviderError
-from openai_api_adapter.providers.aiberm import AibermProvider
-from openai_api_adapter.providers.claude import ClaudeProvider
+from openai_api_adapter.providers import AVAILABLE_PROVIDERS
 from openai_api_adapter.providers.registry import ProviderRegistry
 from openai_api_adapter.routes import chat, models
 
@@ -20,17 +19,36 @@ from openai_api_adapter.routes import chat, models
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler for startup/shutdown."""
-    # Register providers on startup
-    ProviderRegistry.register(
-        ClaudeProvider(),
-        default=(settings.default_provider == "claude"),
-    )
-    ProviderRegistry.register(
-        AibermProvider(),
-        default=(settings.default_provider == "aiberm"),
-    )
+    # Get enabled providers from settings
+    enabled_providers = settings.get_enabled_providers()
+
+    # Register enabled providers on startup using centralized mapping
+    # Note: enabled_providers is already validated by get_enabled_providers()
+    for provider_name in enabled_providers:
+        provider_class = AVAILABLE_PROVIDERS[provider_name]
+        ProviderRegistry.register(
+            provider_class(),
+            default=(settings.default_provider == provider_name),
+        )
+
+    # Validate default provider is enabled
+    if settings.default_provider not in enabled_providers:
+        from openai_api_adapter.utils.logger import logger
+        logger.warning(
+            f"Default provider '{settings.default_provider}' is not enabled. "
+            f"First enabled provider will be used as default."
+        )
+
+    # Ensure at least one provider is registered
+    if not ProviderRegistry.list_providers():
+        known_providers = ", ".join(AVAILABLE_PROVIDERS.keys())
+        raise RuntimeError(
+            f"No providers registered. ENABLED_PROVIDERS='{settings.enabled_providers}' "
+            f"did not match any known providers ({known_providers})."
+        )
 
     if settings.debug:
+        print(f"Enabled providers: {enabled_providers}")
         print(f"Registered providers: {ProviderRegistry.list_providers()}")
         print(f"Default provider: {settings.default_provider}")
 
